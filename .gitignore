@@ -1,0 +1,43 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.idea/
+.vscode/
+
+# Runtime data may contain cookies, account details, logs, and page captures.
+/data/
+
+# Build and local output
+/build/
+/dist/
+*.app/
+*.dmg
+*.pkg
+*.zip
+*.tar.gz
+*.log
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+config/*.local.yaml
+config/*.local.yml
+config/*.local.json
+
+# Local launchd render contains an absolute machine path.
+scripts/com.user.bingrewards.generated.plist

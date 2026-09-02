@@ -1,0 +1,5 @@
+playwright>=1.48,<2
+playwright-stealth>=2,<3
+PyYAML>=6,<7
+loguru>=0.7,<1
+pyobjc-framework-Cocoa>=12,<13

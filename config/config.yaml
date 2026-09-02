@@ -1,0 +1,44 @@
+# Bing Rewards 自动打卡配置
+
+browser:
+  headless: true
+  user_data_dir: "data/browser_profile"
+  navigation_timeout_ms: 30000
+  viewport:
+    width: 1280
+    height: 800
+
+user_agents:
+  pc: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+  mobile: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+search:
+  pc_count: 30
+  mobile_count: 20
+  min_interval_sec: 8
+  max_interval_sec: 20
+  click_result_probability: 0.3
+  result_stay_min_sec: 3
+  result_stay_max_sec: 8
+
+anti_detection:
+  min_delay_sec: 2.0
+  max_delay_sec: 6.0
+  typing_min_sec: 0.05
+  typing_max_sec: 0.2
+  scroll_times_min: 1
+  scroll_times_max: 3
+
+daily_activities:
+  enabled: true
+  puzzle_timeout_sec: 30
+  quiz_timeout_sec: 120
+  skip_types:
+    - "referral"
+
+schedule:
+  run_hour: 9
+  run_minute: 30
+  jitter_sec: 600
+  retry_count: 3
+  retry_interval_min: 30
