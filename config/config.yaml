@@ -33,6 +33,7 @@ daily_activities:
   enabled: true
   puzzle_timeout_sec: 30
   quiz_timeout_sec: 120
+  # referral：没有固定积分的邀请推广；visit：带固定积分、只尝试访问的活动。
   skip_types:
     - "referral"
 

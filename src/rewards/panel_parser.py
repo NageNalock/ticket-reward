@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 from time import monotonic
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from loguru import logger
 from playwright.sync_api import Error as PlaywrightError
@@ -33,22 +35,72 @@ class TaskCard:
     element: Any
     available: bool = True
     completed: bool = False
+    task_id: str = ""
+    section: str = "extra"
+    href: str = ""
 
 
-def classify_task(title: str, description: str = "", href: str = "") -> str:
+def classify_task(title: str, description: str = "", href: str = "", *, points: int = 0) -> str:
     content = f"{title} {description}".lower()
     normalized_href = href.lower()
     if any(word in content for word in ("推荐", "朋友", "refer", "friend", "邀请")):
-        return "referral"
+        # A fixed +N offer can reward visiting the referral page. The referral
+        # programme itself is separate and must never trigger sending invitations.
+        return "visit" if points > 0 else "referral"
     if any(word in content for word in ("拼图", "puzzle", "排列图块", "jigsaw")):
         return "puzzle"
-    if any(word in content for word in ("测验", "quiz", "问答", "答题", "测试", "poll")):
+    if any(
+        word in content
+        for word in ("测验", "quiz", "问答", "答题", "测试", "poll", "答案", "小问题", "trivia")
+    ) or any(word in normalized_href for word in ("quiz", "trivia")):
         return "quiz"
     if any(word in content for word in ("视频", "video", "观看", "watch")):
         return "video"
     if "bing.com/search" in normalized_href or "search?q=" in normalized_href:
         return "keyword_search"
+    if points > 0:
+        return "visit"
     return "unknown"
+
+
+def find_task(original: TaskCard, candidates: list[TaskCard]) -> TaskCard | None:
+    """Rebind only an unambiguous offer, never the first card with the same title."""
+    matches = [candidate for candidate in candidates if _same_task(original, candidate)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _same_task(original: TaskCard, candidate: TaskCard) -> bool:
+    if candidate.section != original.section:
+        return False
+    if original.task_id:
+        return candidate.task_id == original.task_id
+    return (candidate.title, candidate.description, candidate.href, candidate.points) == (
+        original.title,
+        original.description,
+        original.href,
+        original.points,
+    )
+
+
+def task_identity(offer_id: str, dom_id: str, href: str) -> str:
+    """Keep stable offer/link identity in memory without exposing tracking URLs."""
+    if offer_id:
+        return sha256(f"offer:{offer_id}".encode()).hexdigest()
+    identity = f"dom:{dom_id}" if dom_id else ""
+    if href:
+        url = urlsplit(href)
+        if url.scheme in {"http", "https", ""} and (url.path or url.netloc):
+            query = [
+                (key, value)
+                for key, value in parse_qsl(url.query, keep_blank_values=True)
+                if key.lower() not in {"cvid", "form", "ocid", "mkt", "setlang"}
+            ]
+            link_identity = urlunsplit(
+                (url.scheme.lower(), url.netloc.lower(), url.path, urlencode(sorted(query)), "")
+            )
+            # Generic DOM IDs can be recycled for another offer after a refresh.
+            identity += f"\nlink:{link_identity}"
+    return sha256(identity.encode()).hexdigest() if identity else ""
 
 
 def extract_current_points(text: str) -> int | None:
@@ -112,32 +164,56 @@ class PanelParser:
         "[class*='card' i]",
         "a[href*='rewards']",
     )
-    DAILY_CARD_SELECTOR = "#daily_set_card .promo_cont[role='banner']"
+    OFFER_CARD_SELECTOR = ".promo_cont, [data-offer-id], [data-offerid], [data-task-id]"
 
     def __init__(self, page: Any):
         self.page = page
 
     def open_panel(self) -> bool:
+        clicked = False
         for _ in range(12):
-            if any(
-                frame is not self.page.main_frame and "reward" in frame.url.lower()
-                for frame in self.page.frames
-            ):
+            if self._panel_is_ready():
                 return True
-            for selector in self.REWARDS_BUTTON_SELECTORS:
-                candidates = self.page.locator(selector)
-                for index in range(min(candidates.count(), 5)):
-                    candidate = candidates.nth(index)
-                    try:
-                        if candidate.is_visible():
-                            candidate.click(timeout=8_000)
-                            self.page.wait_for_timeout(2_000)
-                            return True
-                    except Exception:
-                        continue
+            if not clicked:
+                for selector in self.REWARDS_BUTTON_SELECTORS:
+                    candidates = self.page.locator(selector)
+                    for index in range(min(candidates.count(), 5)):
+                        candidate = candidates.nth(index)
+                        try:
+                            if candidate.is_visible():
+                                candidate.click(timeout=8_000)
+                                clicked = True
+                                break
+                        except PlaywrightError:
+                            continue
+                    if clicked:
+                        break
             self.page.wait_for_timeout(500)
-        logger.warning("未找到 Microsoft Rewards 入口")
-        return False
+        ready = self._panel_is_ready()
+        if not ready:
+            logger.warning("Rewards 面板内容未就绪" if clicked else "未找到 Microsoft Rewards 入口")
+        return ready
+
+    def _panel_is_ready(self) -> bool:
+        """A preloaded/hidden iframe alone does not mean the flyout has opened."""
+        try:
+            root = self._root()
+            if root is not self.page:
+                frame_element = root.frame_element()
+                try:
+                    # Balance/task contents can load later. Their own readers wait
+                    # for readiness after the visible flyout has opened.
+                    if frame_element.is_visible():
+                        return True
+                finally:
+                    frame_element.dispose()
+            markers = root.locator(f"{self.OFFER_CARD_SELECTOR}, #daily_set_card")
+            if any(markers.nth(index).is_visible() for index in range(min(markers.count(), 10))):
+                return True
+            labels = root.get_by_text(POINT_LABEL_PATTERN, exact=True)
+            return any(labels.nth(index).is_visible() for index in range(min(labels.count(), 5)))
+        except PlaywrightError:
+            return False
 
     def _root(self) -> Any:
         for frame in self.page.frames:
@@ -203,24 +279,7 @@ class PanelParser:
         return None
 
     def parse_daily_tasks(self) -> list[TaskCard]:
-        """Parse only the three authoritative cards inside Bing's Daily Set."""
-        cards = self._root().locator(self.DAILY_CARD_SELECTOR)
-        tasks: list[TaskCard] = []
-        for index in range(min(cards.count(), 10)):
-            card = cards.nth(index)
-            try:
-                if not card.is_visible():
-                    continue
-                aria_label = card.get_attribute("aria-label") or ""
-                if "offer" not in aria_label.lower() and "完成" not in aria_label:
-                    continue
-                text = card.inner_text(timeout=1_500).strip()
-                task = self._parse_card(card, text)
-                if task.title and not STATUS_TEXT_PATTERN.fullmatch(task.title.strip()):
-                    tasks.append(task)
-            except Exception:
-                continue
-        return tasks
+        return [task for task in self.parse_tasks() if task.section == "daily"]
 
     def daily_set_is_complete(self) -> bool:
         root = self._root()
@@ -233,41 +292,78 @@ class PanelParser:
         ).first
         return bool(completion.count() and completion.is_visible())
 
-    def daily_task_state(self, title: str) -> str:
-        """Return completed/pending/unknown from the freshly loaded Daily Set."""
-        tasks = self.parse_daily_tasks()
-        for task in tasks:
-            if task.title == title:
-                return "completed" if task.completed else "pending"
-        if self.daily_set_is_complete() or tasks:
-            # Bing removes each card as soon as it is credited. Other remaining cards,
-            # or the final Daily Set completion panel, prove the target was processed.
+    def task_state(self, original: TaskCard, *, timeout_ms: int = 0) -> str:
+        """Read this offer's state; disappearance alone is not proof of credit."""
+        candidates = self.parse_tasks(timeout_ms=timeout_ms)
+        task = find_task(original, candidates)
+        if task is not None:
+            return "completed" if task.completed else "pending"
+        if (
+            original.section == "daily"
+            and not any(_same_task(original, candidate) for candidate in candidates)
+            and self.daily_set_is_complete()
+        ):
             return "completed"
         return "unknown"
 
-    def parse_tasks(self) -> list[TaskCard]:
-        root = self._root()
-        parsed = self.parse_daily_tasks()
-        fingerprints = {re.sub(r"\s+", " ", task.title).strip().lower() for task in parsed}
+    def parse_tasks(self, *, timeout_ms: int = 0) -> list[TaskCard]:
+        """Allow late extra cards to arrive before accepting a stable inventory."""
+        deadline = monotonic() + max(0, timeout_ms) / 1_000
+        previous = None
+        stable_since = monotonic()
+        while True:
+            tasks = self._parse_tasks_once()
+            now = monotonic()
+            if now >= deadline:
+                return tasks
+            inventory = tuple(
+                (
+                    task.section,
+                    task.task_id,
+                    task.title,
+                    task.description,
+                    task.points,
+                    task.completed,
+                    task.available,
+                )
+                for task in tasks
+            )
+            if inventory != previous:
+                previous, stable_since = inventory, now
+            elif tasks and now - stable_since >= 1:
+                return tasks
+            self.page.wait_for_timeout(min(500, (deadline - now) * 1_000))
 
-        for selector in self.CARD_SELECTORS:
-            cards = root.locator(selector)
-            for index in range(min(cards.count(), 100)):
-                card = cards.nth(index)
-                try:
-                    if not card.is_visible():
-                        continue
-                    text = card.inner_text(timeout=1_500).strip()
-                    if not text or not self._looks_like_task(text):
-                        continue
-                    candidate = self._parse_card(card, text)
-                    fingerprint = re.sub(r"\s+", " ", candidate.title).strip().lower()
-                    if fingerprint in fingerprints:
-                        continue
-                    fingerprints.add(fingerprint)
-                    parsed.append(candidate)
-                except Exception:
+    def _parse_tasks_once(self) -> list[TaskCard]:
+        """Read both Daily Set and extra offers, preserving distinct same-title cards."""
+        root = self._root()
+        cards = root.locator(self.OFFER_CARD_SELECTOR)
+        structured = bool(cards.count())
+        if not structured:
+            # A selector union returns each DOM element once, even if it matches
+            # several selectors. Prefer structured cards whenever Bing provides them.
+            cards = root.locator(", ".join(self.CARD_SELECTORS))
+        parsed: list[TaskCard] = []
+        for index in range(min(cards.count(), 100)):
+            card = cards.nth(index)
+            try:
+                if not card.is_visible():
                     continue
+                if structured:
+                    # Metadata on a nested link belongs to its enclosing promo card.
+                    if card.evaluate("node => Boolean(node.parentElement?.closest('.promo_cont'))"):
+                        continue
+                    if card.locator(".promo_cont").count():
+                        continue
+                text = card.inner_text(timeout=1_500).strip()
+                if not text or (not structured and not self._looks_like_task(text)):
+                    continue
+                candidate = self._parse_card(card, text)
+                if STATUS_TEXT_PATTERN.fullmatch(candidate.title.strip()):
+                    continue
+                parsed.append(candidate)
+            except Exception:
+                continue
         return parsed
 
     @staticmethod
@@ -288,6 +384,9 @@ class PanelParser:
                 "puzzle",
                 "测验",
                 "quiz",
+                "答案",
+                "小问题",
+                "trivia",
                 "推荐",
                 "refer",
             )
@@ -305,15 +404,41 @@ class PanelParser:
             title = lines[0] if lines else "未命名任务"
             description = description or (lines[1] if len(lines) > 1 else "")
 
-        point_chip = card.locator(".point_cont [aria-label], .point_cont .point").first
-        point_aria = point_chip.get_attribute("aria-label") or "" if point_chip.count() else ""
-        points = extract_task_points(text, point_aria)
+        point_chip = card.locator(".point_cont").first
+        point_text = ""
+        point_aria = ""
+        if point_chip.count():
+            point_text = point_chip.inner_text(timeout=1_500).strip()
+            label = point_chip.locator("[aria-label]").first
+            point_aria = point_chip.get_attribute("aria-label") or ""
+            if not point_aria and label.count():
+                point_aria = label.get_attribute("aria-label") or ""
+            # Completed chips may contain only a checkmark and a bare number.
+            bare = re.fullmatch(r"[✓✔]?\s*(\d+)", point_text)
+            if bare:
+                point_text = f"+{bare.group(1)}"
+        else:
+            # Only a standalone reward chip counts; numbers in promotional copy do not.
+            point_text = next(
+                (
+                    line.strip()
+                    for line in text.splitlines()
+                    if re.fullmatch(r"\s*\+\s*\d+\s*", line)
+                ),
+                "",
+            )
+        points = extract_task_points(point_text, point_aria)
 
-        href = card.get_attribute("href") or ""
-        if not href:
-            link = card.locator("a[href]").first
-            if link.count():
-                href = link.get_attribute("href") or ""
+        identity = card.evaluate("""node => {
+            const link = node.closest('a[href]') || node.querySelector('a[href]');
+            const attrs = ['data-offer-id', 'data-offerid', 'data-task-id'];
+            const offerId = attrs.map(attr => node.getAttribute(attr) ||
+                link?.getAttribute(attr)).find(Boolean) || '';
+            return {offerId, domId: node.id || link?.id || '',
+                href: link?.getAttribute('href') || '',
+                section: node.closest('#daily_set_card') ? 'daily' : 'extra'};
+        }""")
+        href = identity["href"]
 
         metadata = " ".join(
             filter(
@@ -327,9 +452,15 @@ class PanelParser:
         ).lower()
         aria_label = card.get_attribute("aria-label") or ""
         completed = offer_is_completed(aria_label)
-        if not aria_label:
-            completed = any(word in metadata for word in ("已完成", "completed", "checkmark"))
-        locked = any(word in metadata for word in ("已锁定", "locked", "disabled"))
+        explicitly_pending = "not completed" in aria_label.lower() or "未完成" in aria_label
+        if not explicitly_pending and not completed:
+            classes = (card.get_attribute("class") or "").lower().split()
+            completed = bool({"completed", "complete"}.intersection(classes))
+            if point_chip.count():
+                checkmark = point_chip.locator("[class*='checkmark' i]").first
+                completed = completed or bool(checkmark.count() and checkmark.is_visible())
+                completed = completed or bool(re.match(r"\s*[✓✔]", point_chip.inner_text()))
+        locked = bool(re.search(r"\b(?:locked|disabled)\b|已锁定", metadata))
         aria_disabled = (card.get_attribute("aria-disabled") or "").lower() == "true"
         lock_marker = card.locator(
             "[aria-label*='lock' i], [aria-label*='锁'], "
@@ -341,10 +472,13 @@ class PanelParser:
             title=title,
             description=description,
             points=points,
-            task_type=classify_task(title, description, href),
+            task_type=classify_task(title, description, href, points=points),
             element=card,
             available=not (locked or aria_disabled or has_lock_marker),
             completed=completed,
+            task_id=task_identity(identity["offerId"], identity["domId"], href),
+            section=identity["section"],
+            href=href,
         )
 
     @staticmethod

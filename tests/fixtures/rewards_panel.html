@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Rewards regression fixture</title>
+<style>
+  body { font: 16px sans-serif; }
+  .promo_cont { display: block; margin: 16px; padding: 20px; border: 1px solid; }
+  .promo-title, .promo-desc, .point_cont { display: block; }
+  .point_cont { width: 60px; }
+  .dset_completion_comp { display: none; }
+</style>
+<div id="daily_set_card">
+  <div class="dset_completion_comp">每日设置已完成</div>
+  <a class="promo_cont" role="banner" data-offer-id="daily-referral"
+     href="https://rewards.bing.com/test-visit?offer=daily-referral" target="_blank"
+     aria-label="将推荐转化为奖励 - Offer not Completed">
+    <span class="promo-title">将推荐转化为奖励</span>
+    <span class="promo-desc">当您的朋友在必应上搜索时，您可以赚取更多积分。只需分享邀请即可。</span>
+    <span class="point_cont"><span aria-label="10 积分">+10</span></span>
+  </a>
+  <a class="promo_cont" role="banner" data-offer-id="daily-sydney"
+     href="https://www.bing.com/search?q=sydney" aria-label="悉尼春日海港花开 - Offer Completed">
+    <span class="promo-title">悉尼春日海港花开</span>
+    <span class="point_cont"><span aria-label="10 积分">✓10</span></span>
+  </a>
+  <a class="promo_cont" role="banner" data-offer-id="daily-reef"
+     href="https://www.bing.com/search?q=reef" aria-label="珊瑚礁奇观 - Offer Completed">
+    <span class="promo-title">珊瑚礁奇观</span>
+    <span class="point_cont"><span aria-label="10 积分">✓10</span></span>
+  </a>
+</div>
+<div id="more_activities">
+  <a class="promo_cont" role="banner" data-offer-id="quiz-old"
+     href="https://www.bing.com/test-quiz?offer=quiz-old" target="_blank"
+     aria-label="你是否知道答案？ - Offer Completed">
+    <span class="promo-title">你是否知道答案？</span>
+    <span class="promo-desc">通过这些小问题挑战自己</span>
+    <span class="point_cont"><span aria-label="5 积分">✓5</span></span>
+  </a>
+  <a class="promo_cont" role="banner" data-offer-id="quiz-new"
+     href="https://www.bing.com/test-quiz?offer=quiz-new" target="_blank"
+     aria-label="你是否知道答案？ - Offer not Completed">
+    <span class="promo-title">你是否知道答案？</span>
+    <span class="promo-desc">通过这些小问题挑战自己</span>
+    <span class="point_cont"><span aria-label="5 积分">+5</span></span>
+  </a>
+  <a class="promo_cont" data-offer-id="referral-promo"
+     href="https://rewards.bing.com/test-invite" aria-label="将推荐转化为奖励">
+    <span class="promo-title">将推荐转化为奖励</span>
+    <span class="promo-desc">当朋友在 Bing 上搜索时可赚取 7,500 积分。只需分享邀请即可。</span>
+  </a>
+  <a class="promo_cont" role="banner" data-offer-id="locked-quiz"
+     href="https://www.bing.com/test-quiz?offer=locked-quiz" aria-disabled="true"
+     aria-label="明日问答 - Offer not Completed">
+    <span class="promo-title">明日问答</span>
+    <span class="point_cont"><span aria-label="5 积分">+5</span></span>
+    <span aria-label="Locked">已锁定</span>
+  </a>
+</div>
+<script>
+  // Synthetic server state supplied by tests; no account data or external requests.
+  const completedOffers = __COMPLETED_OFFERS__;
+  for (const id of completedOffers) {
+    const card = document.querySelector(`[data-offer-id="${id}"]`);
+    if (!card) continue;
+    card.setAttribute('aria-label', `${card.querySelector('.promo-title').textContent} - Offer Completed`);
+    const chip = card.querySelector('.point_cont');
+    if (chip) chip.textContent = chip.textContent.replace('+', '✓');
+  }
+  if (__DAILY_COMPLETE__) {
+    document.querySelectorAll('#daily_set_card .promo_cont').forEach(card => card.remove());
+    document.querySelector('.dset_completion_comp').style.display = 'block';
+  }
+</script>
+</html>

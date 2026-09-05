@@ -28,6 +28,10 @@ python3 -m venv .venv
 
 按 `daily_activities.skip_types` 配置跳过的活动会记录在「跳过任务」中，不计作完成或失败，也不会因此触发失败重试。旧运行记录仍保留当时的结果。
 
+活动扫描覆盖 Rewards 面板中的「每日设置」和额外活动。同名卡片按各自的活动标识或链接匹配；无法唯一识别的卡片会提示失败，不会借用另一张同名卡片的完成状态。
+
+带固定 `+N` 积分的推荐卡会尝试打开活动页，再刷新 Rewards 校验完成状态；没有固定积分、只宣传邀请奖励的卡片仍按 `referral` 跳过。访问过程不会发送邀请或提交表单。若需要跳过所有这类访问，可将 `visit` 加入 `daily_activities.skip_types`。只有 Rewards 明确标记完成，或该卡属于已全部完成的每日设置，才会计作完成；打开页面、卡片消失本身都不代表积分到账。
+
 ## 检查更新
 
 点击主窗口或菜单栏菜单中的「检查更新」。应用会在后台读取：
@@ -86,8 +90,12 @@ SHA256SUMS 使用 `64位十六进制摘要  文件名` 格式；更新器也兼�
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/ruff check src tests scripts
+REWARDS_BROWSER_TESTS=1 PLAYWRIGHT_BROWSERS_PATH="$PWD/build/playwright-browsers" \
+  .venv/bin/python -m unittest tests.test_activity_browser -v
 .venv/bin/python scripts/menu_bar_app.py --ui-smoke-test
 .venv/bin/python scripts/menu_bar_app.py --check-update
 ```
 
 UI 冒烟测试检查关闭窗口后菜单栏仍然存在，且不会启动定时任务。更新单元测试使用模拟网络响应，不会安装或替换应用。`--check-update` 会真实访问 GitHub 并打印版本和匹配安装包，不执行下载。
+
+活动浏览器回归使用构建脚本下载的 Chromium，以无界面模式验证卡片扫描、同名匹配、访问和完成校验。所有网页请求由本地测试页面响应，不使用账号登录状态，也不会发送邀请。

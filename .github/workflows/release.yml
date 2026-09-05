@@ -42,6 +42,12 @@ jobs:
       - name: Build ad-hoc signed Apple Silicon app and DMG
         run: bash scripts/build_app.sh
 
+      - name: Verify Rewards activity navigation in Chromium
+        env:
+          REWARDS_BROWSER_TESTS: "1"
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/build/playwright-browsers
+        run: .venv/bin/python -m unittest tests.test_activity_browser -v
+
       - name: Verify bundle, DMG and checksums
         run: |
           test "$(uname -m)" = "arm64"

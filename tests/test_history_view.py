@@ -62,6 +62,20 @@ class HistoryViewTests(unittest.TestCase):
             "任务后积分：正在读取 1/3",
         )
 
+    def test_reports_extra_activity_progress(self) -> None:
+        self.assertEqual(
+            extract_live_progress("识别到 7 个奖励活动 (每日设置 3，额外活动 4)"),
+            "奖励活动：发现 7 项",
+        )
+        self.assertEqual(
+            extract_live_progress("执行奖励活动: 你是否知道答案？ (quiz, +5)"),
+            "奖励活动：你是否知道答案？",
+        )
+        self.assertEqual(
+            extract_live_progress("奖励活动已由 Rewards 确认完成: 今日挑战"),
+            "奖励活动：今日挑战 已完成",
+        )
+
     def test_formats_running_row(self) -> None:
         row = format_running_row(
             "2026-08-20T12:02:20",

@@ -65,6 +65,18 @@ def extract_live_progress(log_text: str) -> str:
         if match:
             progress = f"移动搜索 {match.group(1)}/{match.group(2)}"
             continue
+        match = re.search(r"识别到\s*(\d+)\s*个奖励活动", line)
+        if match:
+            progress = f"奖励活动：发现 {match.group(1)} 项"
+            continue
+        match = re.search(r"执行奖励活动:\s*(.+?)\s*\(", line)
+        if match:
+            progress = f"奖励活动：{match.group(1)}"
+            continue
+        match = re.search(r"奖励活动已由 Rewards 确认完成:\s*(.+)$", line)
+        if match:
+            progress = f"奖励活动：{match.group(1)} 已完成"
+            continue
         match = re.search(r"识别到\s*(\d+)\s*个每日设置任务", line)
         if match:
             progress = f"每日设置：发现 {match.group(1)} 项"
