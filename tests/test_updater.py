@@ -24,11 +24,12 @@ from src.version import REPOSITORY, InstalledVersion
 
 ARCHIVE = b"a test release archive"
 HASH = hashlib.sha256(ARCHIVE).hexdigest()
-ASSET_NAME = "Bing-Rewards-macOS-arm64.zip"
+ASSET_NAME = "Bing-Rewards-macOS-arm64.dmg"
 TAG = "build-10-abcdef0"
 
 
-def payload() -> dict:
+def payload(extension: str = "dmg") -> dict:
+    asset_name = f"Bing-Rewards-macOS-arm64.{extension}"
     return {
         "tag_name": TAG,
         "name": "Bing Rewards build 10",
@@ -38,8 +39,8 @@ def payload() -> dict:
         "prerelease": False,
         "published_at": "2026-09-05T00:00:00Z",
         "assets": [{
-            "name": ASSET_NAME,
-            "browser_download_url": f"https://github.com/{REPOSITORY}/releases/download/{TAG}/{ASSET_NAME}",
+            "name": asset_name,
+            "browser_download_url": f"https://github.com/{REPOSITORY}/releases/download/{TAG}/{asset_name}",
             "state": "uploaded", "size": len(ARCHIVE), "digest": f"sha256:{HASH}",
         }],
     }
@@ -73,6 +74,23 @@ class ReleaseTests(unittest.TestCase):
         asset["name"] = asset["name"].replace("arm64", "universal2")
         asset["browser_download_url"] = asset["browser_download_url"].replace("arm64", "universal2")
         self.assertIn("universal2", parse_release(data, "x86_64").asset.name)
+
+    def test_prefers_dmg_when_legacy_zip_is_also_present(self) -> None:
+        data = payload("zip")
+        data["assets"].extend(payload()["assets"])
+        self.assertEqual(parse_release(data, "arm64").asset.name, ASSET_NAME)
+
+    def test_prefers_compatible_universal_dmg_over_native_zip(self) -> None:
+        data = payload("zip")
+        dmg = payload()["assets"][0]
+        dmg["name"] = dmg["name"].replace("arm64", "universal2")
+        dmg["browser_download_url"] = dmg["browser_download_url"].replace("arm64", "universal2")
+        data["assets"].append(dmg)
+        self.assertEqual(parse_release(data, "arm64").asset.name, "Bing-Rewards-macOS-universal2.dmg")
+
+    def test_keeps_legacy_zip_support(self) -> None:
+        release = parse_release(payload("zip"), "arm64")
+        self.assertEqual(release.asset.name, "Bing-Rewards-macOS-arm64.zip")
 
     def test_rejects_unpublished_and_malformed_releases(self) -> None:
         for key in ("draft", "prerelease"):
@@ -139,6 +157,12 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(path.name, ASSET_NAME)
         self.assertEqual(progress[-1], (len(ARCHIVE), len(ARCHIVE)))
         self.assertEqual(list(path.parent.iterdir()), [path])
+
+    def test_downloads_legacy_zip(self) -> None:
+        with patch("src.updater.urlopen", return_value=io.BytesIO(ARCHIVE)):
+            path = download_release(parse_release(payload("zip"), "arm64"), self.destination)
+        self.assertEqual(path.suffix, ".zip")
+        self.assertEqual(path.read_bytes(), ARCHIVE)
 
     def test_removes_failed_or_incomplete_downloads(self) -> None:
         for body in (ARCHIVE[:-1], ARCHIVE + b"extra", b"x" * len(ARCHIVE)):

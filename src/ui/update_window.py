@@ -186,7 +186,8 @@ class UpdateWindowController(NSObject):
         elif kind == "downloaded":
             self.archive = value
             self.status.setStringValue_("下载完成，校验通过")
-            self.detail.setStringValue_("在 Finder 中解压 ZIP，退出本应用，再将新版拖入「应用程序」替换。登录与运行记录会保留。")
+            instruction = "打开 DMG" if self.archive.suffix.lower() == ".dmg" else "解压 ZIP"
+            self.detail.setStringValue_(f"在 Finder 中{instruction}，退出本应用，再将新版拖入「应用程序」替换。登录与运行记录会保留。")
             self.progress.setDoubleValue_(100)
             self.download_button.setTitle_("在 Finder 中显示")
             self.download_button.setEnabled_(True)

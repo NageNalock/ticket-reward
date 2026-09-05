@@ -1,7 +1,7 @@
-"""Read GitHub Releases and download a verified macOS distribution archive.
+"""Read GitHub Releases and download a verified macOS installer.
 
 Network work belongs on a background thread. This module never runs an installer
-or replaces the running app; the user installs the verified archive in Finder.
+or replaces the running app; the user installs the verified package in Finder.
 """
 from __future__ import annotations
 
@@ -124,8 +124,9 @@ def parse_release(payload: object, machine: str) -> Release:
         and item.get("state") == "uploaded"
     }
     selected = next((
-        by_name[f"Bing-Rewards-macOS-{arch}.zip"] for arch in architectures
-        if f"Bing-Rewards-macOS-{arch}.zip" in by_name
+        by_name[f"Bing-Rewards-macOS-{arch}.{extension}"]
+        for extension in ("dmg", "zip") for arch in architectures
+        if f"Bing-Rewards-macOS-{arch}.{extension}" in by_name
     ), None)
     asset = None
     checksum_url = ""
@@ -200,11 +201,11 @@ def download_release(
     progress: Callable[[int, int], None] | None = None,
     cancel: Event | None = None,
 ) -> Path:
-    """Atomically expose a complete, verified ZIP; remove partial files on failure."""
+    """Expose a verified DMG (or legacy ZIP); remove partial files on failure."""
     asset = release.asset
     if asset is None:
         raise UpdateError("此版本没有适用于这台 Mac 的安装包。")
-    if not re.fullmatch(r"Bing-Rewards-macOS-(arm64|x86_64|universal2|universal)\.zip", asset.name):
+    if not re.fullmatch(r"Bing-Rewards-macOS-(arm64|x86_64|universal2|universal)\.(dmg|zip)", asset.name):
         raise UpdateError("发布包文件名无效。")
     _github_url(asset.url, f"/{REPOSITORY}/releases/download/{release.tag}/{asset.name}")
     directory: Path | None = None

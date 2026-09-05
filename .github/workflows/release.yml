@@ -39,17 +39,18 @@ jobs:
           .venv/bin/python -m unittest discover -s tests -v
           .venv/bin/ruff check src tests scripts
 
-      - name: Build ad-hoc signed Apple Silicon app
+      - name: Build ad-hoc signed Apple Silicon app and DMG
         run: bash scripts/build_app.sh
 
-      - name: Verify bundle and prepare checksums
+      - name: Verify bundle, DMG and checksums
         run: |
           test "$(uname -m)" = "arm64"
           test "$(plutil -extract CFBundleShortVersionString raw 'dist/Bing Rewards.app/Contents/Info.plist')" != ""
           file 'dist/Bing Rewards.app/Contents/MacOS/Bing Rewards' | grep -q 'arm64'
           codesign --verify --deep --strict 'dist/Bing Rewards.app'
+          hdiutil verify dist/Bing-Rewards-macOS-arm64.dmg
           cd dist
-          shasum -a 256 Bing-Rewards-macOS-arm64.zip > SHA256SUMS.txt
+          shasum -a 256 -c SHA256SUMS.txt
 
       - name: Publish GitHub Release
         if: github.ref == 'refs/heads/main'
@@ -58,7 +59,7 @@ jobs:
         run: |
           TAG="$(.venv/bin/python -c 'import json; print(json.load(open("build/build-info.json"))["release_tag"])')"
           gh release create "$TAG" \
-            dist/Bing-Rewards-macOS-arm64.zip \
+            dist/Bing-Rewards-macOS-arm64.dmg \
             dist/SHA256SUMS.txt \
             --target "$GITHUB_SHA" \
             --latest \

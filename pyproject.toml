@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bing-rewards-runner"
-version = "0.5.0"
+version = "0.5.1"
 description = "A local Playwright runner for Microsoft Rewards activities"
 readme = "README.md"
 requires-python = ">=3.10"
