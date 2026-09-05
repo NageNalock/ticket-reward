@@ -27,6 +27,21 @@ class PointsTrackerTests(unittest.TestCase):
         self.assertIsNone(record["earned"])
         self.assertEqual(record["status"], "failed")
 
+    def test_skipped_tasks_are_persisted_separately_from_successes_and_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "history.json"
+            tracker = PointsTracker(path)
+            tracker.record_run(
+                100, 120, ["每日任务"], [], 2,
+                skipped_tasks=["推荐活动 (配置跳过)"],
+            )
+            record = PointsTracker(path).get_history(1)[0]
+
+        self.assertEqual(record["status"], "success")
+        self.assertEqual(record["tasks_completed"], ["每日任务"])
+        self.assertEqual(record["tasks_failed"], [])
+        self.assertEqual(record["tasks_skipped"], ["推荐活动 (配置跳过)"])
+
     def test_history_is_returned_newest_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "history.json"

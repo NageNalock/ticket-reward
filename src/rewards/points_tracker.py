@@ -73,6 +73,8 @@ class PointsTracker:
         failed_tasks: list[str],
         duration_sec: float,
         trigger: str = "manual",
+        *,
+        skipped_tasks: list[str] | None = None,
     ) -> dict[str, Any]:
         now = datetime.now()
         earned = (
@@ -90,6 +92,7 @@ class PointsTracker:
             "earned": earned,
             "tasks_completed": list(completed_tasks),
             "tasks_failed": list(failed_tasks),
+            "tasks_skipped": list(skipped_tasks or []),
             "duration_sec": round(duration_sec, 1),
         }
         self._runs.append(record)

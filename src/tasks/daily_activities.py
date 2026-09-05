@@ -58,7 +58,7 @@ class DailyActivitiesTask:
                     results["skipped"].append(f"{task.title} (未解锁)")
                     continue
                 if task.task_type in self.config["daily_activities"]["skip_types"]:
-                    results["failed"].append(f"{task.title} (配置跳过，未完成)")
+                    results["skipped"].append(f"{task.title} (配置跳过)")
                     continue
                 if task.task_type not in {"keyword_search", "puzzle", "quiz"}:
                     results["failed"].append(f"{task.title} (不支持 {task.task_type})")

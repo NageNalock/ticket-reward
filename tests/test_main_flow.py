@@ -26,12 +26,16 @@ class MainFlowTests(unittest.TestCase):
         }
         events: list[str] = []
 
+        def read_points(_context, *, phase="任务前") -> int:
+            events.append(phase)
+            return 100
+
         with (
             patch("src.main.ensure_runtime_dirs"),
             patch("src.main.load_config", return_value=config),
             patch("src.main._load_search_terms", return_value=["测试"]),
             patch("src.main.project_path", return_value=MagicMock()),
-            patch("src.main._read_points", side_effect=[100, 100]),
+            patch("src.main._read_points", side_effect=read_points),
             patch("src.main.send_notification"),
             patch("src.main.PointsTracker") as tracker_class,
             patch("src.main.BrowserManager") as browser_class,
@@ -46,7 +50,10 @@ class MainFlowTests(unittest.TestCase):
 
             def run_daily() -> dict[str, list[str]]:
                 events.append("daily")
-                return {"completed": ["daily"], "failed": [], "skipped": []}
+                return {
+                    "completed": ["daily"], "failed": [],
+                    "skipped": ["推荐活动 (配置跳过)"],
+                }
 
             def run_pc() -> dict[str, object]:
                 events.append("pc")
@@ -62,7 +69,10 @@ class MainFlowTests(unittest.TestCase):
 
             self.assertEqual(run(args), 0)
 
-        self.assertEqual(events, ["daily", "pc", "mobile"])
+        self.assertEqual(events, ["任务前", "daily", "pc", "mobile", "任务后"])
+        record = tracker_class.return_value.record_run.call_args
+        self.assertEqual(record.args[3], [])
+        self.assertEqual(record.kwargs["skipped_tasks"], ["推荐活动 (配置跳过)"])
 
     def test_unhandled_worker_error_is_written_to_history(self) -> None:
         with (

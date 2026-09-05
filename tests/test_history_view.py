@@ -19,6 +19,7 @@ class HistoryViewTests(unittest.TestCase):
                 "trigger": "ui",
                 "earned": 15,
                 "tasks_completed": ["pc_search(5/5)"],
+                "tasks_skipped": ["推荐活动 (配置跳过)"],
                 "tasks_failed": ["daily"],
                 "duration_sec": 61.2,
             }
@@ -27,6 +28,12 @@ class HistoryViewTests(unittest.TestCase):
         self.assertEqual(row["status"], "部分失败")
         self.assertEqual(row["earned"], "+15")
         self.assertEqual(row["duration"], "61s")
+        self.assertEqual(row["skipped"], "推荐活动 (配置跳过)")
+
+    def test_old_history_without_skipped_tasks_still_displays(self) -> None:
+        row = format_history_row({"tasks_failed": ["points_unverified"]})
+        self.assertEqual(row["skipped"], "—")
+        self.assertEqual(row["failed"], "积分未核实")
 
     def test_formats_summary_cards(self) -> None:
         cards = format_summary({"total": 4, "success": 2, "partial": 1, "failed": 1, "earned": 30})
@@ -44,6 +51,16 @@ class HistoryViewTests(unittest.TestCase):
             "每日任务：今日卡片",
         )
         self.assertEqual(extract_live_progress("unrelated debug output"), "")
+
+    def test_reports_balance_readiness_progress(self) -> None:
+        self.assertEqual(
+            extract_live_progress("任务前积分读取 2/3：等待 Rewards 加载"),
+            "任务前积分：正在读取 2/3",
+        )
+        self.assertEqual(
+            extract_live_progress("任务后积分读取 1/3：等待 Rewards 加载"),
+            "任务后积分：正在读取 1/3",
+        )
 
     def test_formats_running_row(self) -> None:
         row = format_running_row(

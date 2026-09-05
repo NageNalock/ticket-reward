@@ -42,7 +42,7 @@ class DailyActivitiesTests(unittest.TestCase):
 
     @patch("src.tasks.daily_activities.random_delay")
     @patch("src.tasks.daily_activities.PanelParser")
-    def test_required_daily_card_skipped_by_config_is_a_failure(
+    def test_daily_card_skipped_by_config_is_neither_completed_nor_failed(
         self, parser_class: MagicMock, _delay: MagicMock
     ) -> None:
         context = MagicMock()
@@ -57,14 +57,19 @@ class DailyActivitiesTests(unittest.TestCase):
         parser.open_panel.return_value = True
         parser.parse_daily_tasks.return_value = [card]
 
-        result = DailyActivitiesTask(
+        runner = DailyActivitiesTask(
             context,
             {"daily_activities": {"skip_types": ["referral"]}},
-        ).run()
+        )
+        runner._run_task = MagicMock()
+        runner._wait_for_completion = MagicMock()
+        result = runner.run()
 
         self.assertEqual(result["completed"], [])
-        self.assertEqual(result["skipped"], [])
-        self.assertEqual(result["failed"], ["推荐活动 (配置跳过，未完成)"])
+        self.assertEqual(result["skipped"], ["推荐活动 (配置跳过)"])
+        self.assertEqual(result["failed"], [])
+        runner._run_task.assert_not_called()
+        runner._wait_for_completion.assert_not_called()
 
     @patch("src.tasks.daily_activities.random_delay")
     @patch("src.tasks.daily_activities.PanelParser")

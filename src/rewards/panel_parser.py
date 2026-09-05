@@ -3,9 +3,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from time import monotonic
 from typing import Any
 
 from loguru import logger
+from playwright.sync_api import Error as PlaywrightError
 
 from src.utils.storage import project_path
 
@@ -143,7 +145,23 @@ class PanelParser:
                 return frame
         return self.page
 
-    def get_current_points(self) -> int | None:
+    def get_current_points(self, *, timeout_ms: int = 0) -> int | None:
+        """Wait for a labelled balance, including a late or replaced Rewards frame."""
+        deadline = monotonic() + max(0, timeout_ms) / 1_000
+        while True:
+            try:
+                value = self._get_current_points_once()
+                if value is not None:
+                    return value
+            except PlaywrightError as exc:
+                # A frame can be replaced while the first authenticated page loads.
+                logger.debug(f"积分内容暂不可读取 ({type(exc).__name__})")
+            remaining_ms = (deadline - monotonic()) * 1_000
+            if remaining_ms <= 0:
+                return None
+            self.page.wait_for_timeout(min(500, remaining_ms))
+
+    def _get_current_points_once(self) -> int | None:
         roots = [self._root()]
         if roots[0] is not self.page:
             roots.append(self.page)

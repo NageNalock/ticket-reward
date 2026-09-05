@@ -32,6 +32,7 @@ def format_history_row(record: dict[str, Any]) -> dict[str, str]:
         ),
         "earned": f"{earned:+d}" if isinstance(earned, int) else "—",
         "completed": _task_summary(completed),
+        "skipped": _task_summary(record.get("tasks_skipped") or []),
         "failed": _task_summary(failed),
         "duration": f"{float(duration):.0f}s" if isinstance(duration, (int, float)) else "—",
     }
@@ -52,6 +53,10 @@ def extract_live_progress(log_text: str) -> str:
     progress = ""
     for raw_line in log_text.splitlines():
         line = raw_line.rsplit("|", 1)[-1].strip()
+        match = re.search(r"(任务前|任务后)积分读取 (\d+)/(\d+)", line)
+        if match:
+            progress = f"{match.group(1)}积分：正在读取 {match.group(2)}/{match.group(3)}"
+            continue
         match = re.search(r"PC 搜索\s+(\d+)/(\d+)\s+完成", line, re.IGNORECASE)
         if match:
             progress = f"PC 搜索 {match.group(1)}/{match.group(2)}"
@@ -96,6 +101,7 @@ def format_running_row(
         "trigger": TRIGGER_LABELS.get(trigger, trigger),
         "earned": "—",
         "completed": progress,
+        "skipped": "—",
         "failed": "—",
         "duration": f"{max(0, duration_sec)}s",
     }
@@ -104,5 +110,5 @@ def format_running_row(
 def _task_summary(tasks: list[Any]) -> str:
     if not tasks:
         return "—"
-    text = ", ".join(str(task) for task in tasks)
+    text = ", ".join("积分未核实" if task == "points_unverified" else str(task) for task in tasks)
     return text if len(text) <= 42 else f"{text[:39]}…"

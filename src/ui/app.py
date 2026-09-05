@@ -231,8 +231,9 @@ class MenuBarController(NSObject):
             ("status", "状态", 80),
             ("trigger", "来源", 60),
             ("earned", "积分", 62),
-            ("completed", "完成任务", 214),
-            ("failed", "失败任务", 205),
+            ("completed", "完成任务", 154),
+            ("skipped", "跳过任务", 120),
+            ("failed", "失败任务", 145),
             ("duration", "耗时", 56),
         )
         for identifier, heading, width in columns:
