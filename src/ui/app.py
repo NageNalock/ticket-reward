@@ -12,30 +12,23 @@ from typing import Any
 import objc
 from AppKit import (
     NSApp,
+    NSAppearance,
+    NSAppearanceNameAqua,
     NSApplication,
     NSApplicationActivationPolicyAccessory,
     NSBackingStoreBuffered,
-    NSBezelStyleRounded,
-    NSButton,
-    NSFloatingWindowLevel,
-    NSFont,
-    NSFontWeightBold,
-    NSFontWeightSemibold,
     NSImage,
-    NSLineBorder,
     NSMakeRect,
     NSMenu,
     NSMenuItem,
     NSScrollView,
+    NSSegmentedControl,
     NSStatusBar,
     NSTableColumn,
     NSTableView,
     NSTextAlignmentCenter,
-    NSTextField,
     NSVariableStatusItemLength,
     NSWindow,
-    NSWindowCollectionBehaviorCanJoinAllSpaces,
-    NSWindowCollectionBehaviorFullScreenAuxiliary,
     NSWindowStyleMaskClosable,
     NSWindowStyleMaskTitled,
     NSWorkspace,
@@ -43,6 +36,7 @@ from AppKit import (
 from Foundation import NSURL, NSObject, NSTimer
 
 from src.rewards.points_tracker import PointsTracker
+from src.ui import theme
 from src.ui.history_view import (
     extract_live_progress,
     format_history_row,
@@ -50,8 +44,10 @@ from src.ui.history_view import (
     format_summary,
 )
 from src.ui.scheduler import calculate_next_run, calculate_retry_run, find_pending_retry
+from src.ui.update_window import UpdateWindowController
 from src.utils.config_loader import load_config
-from src.utils.storage import ensure_runtime_dirs, project_path
+from src.utils.storage import bundled_path, ensure_runtime_dirs, project_path
+from src.version import installed_version
 
 
 class MenuBarController(NSObject):
@@ -68,7 +64,9 @@ class MenuBarController(NSObject):
         self.process_started_at: datetime | None = None
         self.live_progress = ""
         self.rows: list[dict[str, str]] = []
+        self.history_rows: list[dict[str, str]] = []
         self.stat_labels: list[Any] = []
+        self.update_controller = None
         self.next_run: datetime | None = None
         self.next_run_is_retry = False
         self.retry_number = 0
@@ -96,10 +94,12 @@ class MenuBarController(NSObject):
 
     def applicationWillTerminate_(self, _notification: Any) -> None:
         self._stop_child()
+        if self.update_controller is not None:
+            self.update_controller.stop()
 
     def windowShouldClose_(self, sender: Any) -> bool:
         sender.orderOut_(None)
-        self._set_runtime_status("已隐藏到菜单栏，点击礼物图标可重新打开。")
+        self._set_runtime_status("已隐藏到菜单栏，点击票券图标可重新打开。")
         return False
 
     @objc.python_method
@@ -109,7 +109,7 @@ class MenuBarController(NSObject):
         )
         button = self.status_item.button()
         image = NSImage.imageWithSystemSymbolName_accessibilityDescription_(
-            "gift.fill", "Bing Rewards"
+            "ticket.fill", "Bing Rewards"
         )
         if image is not None:
             image.setTemplate_(True)
@@ -128,6 +128,7 @@ class MenuBarController(NSObject):
         self._add_menu_item(menu, "刷新记录", "refreshHistory:")
         self._add_menu_item(menu, "打开日志目录", "openLogs:")
         self._add_menu_item(menu, "打开配置", "openConfig:")
+        self._add_menu_item(menu, "检查更新…", "checkUpdates:")
         menu.addItem_(NSMenuItem.separatorItem())
         self._add_menu_item(menu, "显式退出", "quitApplication:")
         self.status_item.setMenu_(menu)
@@ -141,96 +142,120 @@ class MenuBarController(NSObject):
 
     @objc.python_method
     def _create_window(self) -> None:
-        frame = NSMakeRect(0, 0, 860, 550)
+        frame = NSMakeRect(0, 0, 1000, 720)
         style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             frame, style, NSBackingStoreBuffered, False
         )
         self.window.setTitle_("Bing Rewards 运行概览")
         self.window.setDelegate_(self)
-        self.window.setLevel_(NSFloatingWindowLevel)
-        self.window.setCollectionBehavior_(
-            NSWindowCollectionBehaviorCanJoinAllSpaces
-            | NSWindowCollectionBehaviorFullScreenAuxiliary
-        )
+        self.window.setAppearance_(NSAppearance.appearanceNamed_(NSAppearanceNameAqua))
+        self.window.setBackgroundColor_(theme.color(theme.BACKGROUND))
+        self.window.setContentView_(theme.panel(frame, theme.BACKGROUND, 0))
         self.window.setHidesOnDeactivate_(False)
         self.window.center()
         content = self.window.contentView()
 
-        title = self._label("Bing Rewards", NSMakeRect(24, 500, 500, 32), 24, True)
-        content.addSubview_(title)
-        subtitle = self._label(
-            "运行记录保存在本机；关闭窗口后仍会驻留菜单栏并等待下次定时运行。",
-            NSMakeRect(25, 476, 700, 20),
-            12,
-            False,
-        )
-        content.addSubview_(subtitle)
+        app_icon = NSImage.alloc().initWithContentsOfFile_(str(bundled_path("assets/AppIcon.icns")))
+        if app_icon is not None:
+            NSApp.setApplicationIconImage_(app_icon)
+        content.addSubview_(theme.label("Bing Rewards", NSMakeRect(32, 654, 400, 34), 27, True, rounded=True))
+        content.addSubview_(theme.label("每天的小积累，都值得期待。", NSMakeRect(33, 626, 440, 22), 13, ink=theme.MUTED))
+        content.addSubview_(theme.button("检查更新", NSMakeRect(846, 654, 124, 34), self, "checkUpdates:", symbol="arrow.down.circle"))
+        version = theme.label(installed_version().label, NSMakeRect(690, 626, 274, 20), 11, ink=theme.MUTED)
+        version.setAlignment_(2)
+        content.addSubview_(version)
 
-        stat_width = 154
-        for index in range(5):
-            stat_box = self._label("—", NSMakeRect(24 + index * 164, 414, stat_width, 52), 15, True)
-            stat_box.setAlignment_(NSTextAlignmentCenter)
-            stat_box.setBezeled_(True)
-            stat_box.setBordered_(True)
-            stat_box.setEditable_(False)
-            stat_box.setSelectable_(False)
-            content.addSubview_(stat_box)
-            self.stat_labels.append(stat_box)
+        # A ticket-colored balance area gives the rewards their own visual identity.
+        balance = theme.panel(NSMakeRect(30, 446, 352, 157), theme.MINT)
+        content.addSubview_(balance)
+        balance.addSubview_(theme.label("累计获得积分", NSMakeRect(22, 113, 190, 22), 13, True, theme.ACCENT))
+        self.earned_label = theme.label("+0", NSMakeRect(20, 44, 210, 65), 45, True, theme.INK, True)
+        balance.addSubview_(self.earned_label)
+        balance.addSubview_(theme.label("每一分，都是今天的小收获", NSMakeRect(22, 20, 260, 20), 11, ink=theme.MUTED))
+        balance.addSubview_(theme.mascot(NSMakeRect(212, 22, 132, 132)))
 
-        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(24, 94, 812, 304))
+        activity = theme.panel(NSMakeRect(398, 446, 572, 157))
+        content.addSubview_(activity)
+        activity.addSubview_(theme.label("下次运行", NSMakeRect(24, 115, 280, 20), 12, ink=theme.MUTED))
+        self.schedule_label = theme.label("正在安排…", NSMakeRect(23, 79, 350, 34), 25, True, rounded=True)
+        activity.addSubview_(self.schedule_label)
+        self.runtime_status = theme.label("就绪", NSMakeRect(24, 22, 355, 48), 12, ink=theme.MUTED)
+        activity.addSubview_(self.runtime_status)
+        self.run_button = theme.button("立即运行", NSMakeRect(411, 86, 139, 38), self, "runNow:", primary=True, symbol="play.fill")
+        activity.addSubview_(self.run_button)
+        self.login_button = theme.button("登录账号", NSMakeRect(411, 40, 139, 34), self, "loginNow:", symbol="person.crop.circle")
+        activity.addSubview_(self.login_button)
+
+        metrics = theme.panel(NSMakeRect(30, 346, 940, 84))
+        content.addSubview_(metrics)
+        headings = ("运行次数", "成功", "部分失败", "失败")
+        inks = (theme.INK, theme.ACCENT, theme.WARNING, theme.ERROR)
+        for index, (heading, ink) in enumerate(zip(headings, inks, strict=True)):
+            x = 24 + index * 236
+            metrics.addSubview_(theme.label(heading, NSMakeRect(x, 48, 190, 18), 12, ink=theme.MUTED))
+            value = theme.label("0", NSMakeRect(x, 14, 190, 32), 25, True, ink, True)
+            metrics.addSubview_(value)
+            self.stat_labels.append(value)
+            if index:
+                theme.divider(metrics, x - 24, 20, 1, 44)
+        self.stat_labels.append(self.earned_label)
+
+        content.addSubview_(theme.label("运行记录", NSMakeRect(32, 301, 155, 25), 17, True))
+        self.history_count = theme.label("最近 0 条", NSMakeRect(125, 303, 160, 20), 11, ink=theme.MUTED)
+        content.addSubview_(self.history_count)
+        self.history_filter = NSSegmentedControl.alloc().initWithFrame_(NSMakeRect(631, 297, 234, 30))
+        self.history_filter.setSegmentCount_(3)
+        for index, name in enumerate(("全部", "成功", "待关注")):
+            self.history_filter.setLabel_forSegment_(name, index)
+            self.history_filter.setWidth_forSegment_(72, index)
+        self.history_filter.setSelectedSegment_(0)
+        self.history_filter.setTarget_(self)
+        self.history_filter.setAction_("filterHistory:")
+        content.addSubview_(self.history_filter)
+        content.addSubview_(theme.button("刷新", NSMakeRect(878, 295, 94, 34), self, "refreshHistory:", symbol="arrow.clockwise"))
+
+        content.addSubview_(theme.panel(NSMakeRect(30, 70, 940, 215)))
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(44, 80, 912, 193))
         scroll.setHasVerticalScroller_(True)
-        scroll.setBorderType_(NSLineBorder)
         self.table = NSTableView.alloc().initWithFrame_(scroll.bounds())
         self.table.setDelegate_(self)
         self.table.setDataSource_(self)
-        self.table.setUsesAlternatingRowBackgroundColors_(True)
+        self.table.setBackgroundColor_(theme.color(theme.SURFACE))
+        self.table.setRowHeight_(36)
+        self.table.setIntercellSpacing_((10, 4))
+        self.table.setAllowsColumnReordering_(False)
+        self.table.setAllowsColumnResizing_(False)
         columns = (
-            ("time", "时间", 120),
-            ("status", "状态", 72),
-            ("trigger", "来源", 62),
-            ("earned", "积分", 54),
-            ("completed", "完成任务", 170),
-            ("failed", "失败任务", 175),
+            ("time", "时间", 130),
+            ("status", "状态", 80),
+            ("trigger", "来源", 60),
+            ("earned", "积分", 62),
+            ("completed", "完成任务", 214),
+            ("failed", "失败任务", 205),
             ("duration", "耗时", 56),
         )
         for identifier, heading, width in columns:
             column = NSTableColumn.alloc().initWithIdentifier_(identifier)
             column.headerCell().setStringValue_(heading)
             column.setWidth_(width)
+            column.headerCell().setFont_(theme.font(11, True))
+            column.dataCell().setFont_(theme.font(12))
+            column.dataCell().setLineBreakMode_(4)
             self.table.addTableColumn_(column)
         scroll.setDocumentView_(self.table)
         content.addSubview_(scroll)
-
-        self.run_button = self._button("立即运行", NSMakeRect(24, 46, 100, 32), "runNow:")
-        content.addSubview_(self.run_button)
-        content.addSubview_(self._button("刷新", NSMakeRect(132, 46, 82, 32), "refreshHistory:"))
-        content.addSubview_(self._button("登录账号", NSMakeRect(222, 46, 96, 32), "loginNow:"))
-        content.addSubview_(self._button("查看日志", NSMakeRect(326, 46, 96, 32), "openLogs:"))
-        self.runtime_status = self._label("就绪", NSMakeRect(438, 51, 398, 22), 12, False)
-        self.runtime_status.setAlignment_(2)
-        content.addSubview_(self.runtime_status)
-
-    @objc.python_method
-    def _label(self, text: str, frame: Any, size: float, bold: bool) -> Any:
-        label = NSTextField.alloc().initWithFrame_(frame)
-        label.setStringValue_(text)
-        label.setBezeled_(False)
-        label.setDrawsBackground_(False)
-        label.setEditable_(False)
-        label.setSelectable_(False)
-        weight = NSFontWeightBold if bold else NSFontWeightSemibold
-        label.setFont_(NSFont.systemFontOfSize_weight_(size, weight))
-        return label
-
-    @objc.python_method
-    def _button(self, title: str, frame: Any, action: str) -> Any:
-        button = NSButton.alloc().initWithFrame_(frame)
-        button.setTitle_(title)
-        button.setBezelStyle_(NSBezelStyleRounded)
-        button.setTarget_(self)
-        button.setAction_(action)
-        return button
+        self.empty_view = theme.panel(NSMakeRect(45, 83, 908, 157))
+        self.empty_title = theme.label("第一份积分，从这里开始", NSMakeRect(220, 86, 468, 28), 17, True)
+        self.empty_title.setAlignment_(NSTextAlignmentCenter)
+        self.empty_view.addSubview_(self.empty_title)
+        self.empty_detail = theme.label("先登录 Microsoft 账号，再点击「立即运行」。", NSMakeRect(170, 52, 568, 24), 13, ink=theme.MUTED)
+        self.empty_detail.setAlignment_(NSTextAlignmentCenter)
+        self.empty_view.addSubview_(self.empty_detail)
+        content.addSubview_(self.empty_view)
+        content.addSubview_(theme.label("记录仅保存在本机 · 关闭窗口后继续驻留菜单栏", NSMakeRect(32, 26, 630, 20), 11, ink=theme.MUTED))
+        content.addSubview_(theme.button("打开配置", NSMakeRect(754, 19, 104, 32), self, "openConfig:", symbol="slider.horizontal.3"))
+        content.addSubview_(theme.button("查看日志", NSMakeRect(870, 19, 104, 32), self, "openLogs:", symbol="doc.text"))
 
     def numberOfRowsInTableView_(self, _table_view: Any) -> int:
         return len(self.rows)
@@ -241,6 +266,22 @@ class MenuBarController(NSObject):
         identifier = str(table_column.identifier())
         return self.rows[row].get(identifier, "")
 
+    def tableView_willDisplayCell_forTableColumn_row_(
+        self, _table: Any, cell: Any, column: Any, row: int
+    ) -> None:
+        ink = theme.INK
+        identifier = str(column.identifier())
+        value = self.rows[row].get(identifier, "")
+        if identifier == "status":
+            ink = {"成功": theme.ACCENT, "部分失败": theme.WARNING, "失败": theme.ERROR,
+                   "运行中": theme.ACCENT, "登录中": theme.ACCENT}.get(value, theme.MUTED)
+        elif identifier == "earned" and value.startswith("+"):
+            ink = theme.ACCENT
+        elif identifier in ("time", "trigger", "duration"):
+            ink = theme.MUTED
+        cell.setTextColor_(theme.color(ink))
+        cell.setFont_(theme.font(12, identifier in ("status", "earned")))
+
     def showDashboard_(self, _sender: Any) -> None:
         self.window.makeKeyAndOrderFront_(None)
         self.window.orderFrontRegardless()
@@ -248,21 +289,43 @@ class MenuBarController(NSObject):
 
     def refreshHistory_(self, _sender: Any) -> None:
         tracker = PointsTracker()
-        self.rows = [format_history_row(record) for record in tracker.get_history(50)]
-        if self.process is not None and self.process.poll() is None:
-            self._read_live_progress()
-            self.rows.insert(0, self._running_row())
+        self.history_rows = [format_history_row(record) for record in tracker.get_history(50)]
         for label, text in zip(
             self.stat_labels, format_summary(tracker.get_summary()), strict=True
         ):
-            label.setStringValue_(text)
-        self.table.reloadData()
+            label.setStringValue_(text.rsplit("\n", 1)[-1])
+        self._apply_history_filter()
         if self.process is None:
-            latest = self.rows[0] if self.rows else None
+            latest = self.history_rows[0] if self.history_rows else None
             message = (
                 f"最近一次：{latest['time']} · {latest['status']}" if latest else "尚无运行记录"
             )
             self._set_runtime_status(message)
+
+    def filterHistory_(self, _sender: Any) -> None:
+        self._apply_history_filter()
+
+    @objc.python_method
+    def _apply_history_filter(self) -> None:
+        selected = self.history_filter.selectedSegment()
+        self.rows = [row for row in self.history_rows if (
+            selected == 0 or (selected == 1 and row["status"] == "成功")
+            or (selected == 2 and row["status"] != "成功")
+        )]
+        if self.process is not None and self.process.poll() is None:
+            self._read_live_progress()
+            self.rows.insert(0, self._running_row())
+        self.history_count.setStringValue_(f"最近 {len(self.history_rows)} 条")
+        self.empty_view.setHidden_(bool(self.rows))
+        filtered = bool(self.history_rows)
+        self.empty_title.setStringValue_("没有符合条件的记录" if filtered else "第一份积分，从这里开始")
+        self.empty_detail.setStringValue_("切换到「全部」查看其他运行记录。" if filtered else "先登录 Microsoft 账号，再点击「立即运行」。")
+        self.table.reloadData()
+
+    def checkUpdates_(self, _sender: Any) -> None:
+        if self.update_controller is None:
+            self.update_controller = UpdateWindowController.alloc().init()
+        self.update_controller.show()
 
     def runNow_(self, _sender: Any) -> None:
         self._start_child("run")
@@ -282,17 +345,26 @@ class MenuBarController(NSObject):
         self.process_log_path = log_path
         self.process_log_offset = log_path.stat().st_size if log_path.exists() else 0
         self.process_log = log_path.open("ab", buffering=0)
-        self.process = subprocess.Popen(
-            command,
-            stdout=self.process_log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            cwd=str(project_path("data")),
-        )
+        try:
+            self.process = subprocess.Popen(
+                command,
+                stdout=self.process_log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                cwd=str(project_path("data")),
+            )
+        except OSError as exc:
+            self.process_log.close()
+            self.process_log = None
+            self._set_runtime_status(f"无法启动任务：{exc}")
+            if kind == "scheduled":
+                self._schedule_next_run()
+            return
         self.process_kind = kind
         self.process_started_at = datetime.now()
         self.live_progress = "正在打开登录浏览器" if kind == "login" else "正在启动"
         self.run_button.setEnabled_(False)
+        self.login_button.setEnabled_(False)
         self.run_menu_item.setEnabled_(False)
         self.login_menu_item.setEnabled_(False)
         message = "正在打开登录浏览器…" if kind == "login" else "任务运行中…"
@@ -301,7 +373,8 @@ class MenuBarController(NSObject):
 
     def pollProcess_(self, _timer: Any) -> None:
         if self.process is None:
-            self._maybe_start_scheduled_run()
+            if not self.smoke_test:
+                self._maybe_start_scheduled_run()
             return
         return_code = self.process.poll()
         if return_code is None:
@@ -323,6 +396,7 @@ class MenuBarController(NSObject):
             self.process_log.close()
             self.process_log = None
         self.run_button.setEnabled_(True)
+        self.login_button.setEnabled_(True)
         self.run_menu_item.setEnabled_(True)
         self.login_menu_item.setEnabled_(True)
         self.refreshHistory_(None)
@@ -389,6 +463,7 @@ class MenuBarController(NSObject):
         else:
             self.rows.insert(0, row)
         self.table.reloadData()
+        self.empty_view.setHidden_(True)
         self._set_runtime_status(f"{row['completed']} · 已运行 {row['duration']}")
 
     @objc.python_method
@@ -426,6 +501,15 @@ class MenuBarController(NSObject):
             else:
                 title = f"下次运行：{self.next_run:%m-%d %H:%M}"
             self.schedule_menu_item.setTitle_(title)
+        if hasattr(self, "schedule_label"):
+            if self.next_run is None:
+                text = "正在运行" if self.process is not None else "准备运行"
+            else:
+                day = "今天" if self.next_run.date() == datetime.now().date() else "明天"
+                text = f"{day} {self.next_run:%H:%M}"
+                if self.next_run_is_retry:
+                    text += f" · 重试 {self.retry_number}"
+            self.schedule_label.setStringValue_(text)
 
     @objc.python_method
     def _schedule_retry(self, cycle_date: date, retry_number: int) -> bool:
@@ -512,23 +596,16 @@ class MenuBarController(NSObject):
 
 
 def _worker_command(kind: str) -> list[str]:
+    switch = "--login-worker" if kind == "login" else "--worker"
     if getattr(sys, "frozen", False):
-        switch = "--login-worker" if kind == "login" else "--worker"
-        if kind == "scheduled":
-            return [sys.executable, switch, "--mode", "headless", "--trigger", "scheduled"]
-        return [sys.executable, switch]
-    if kind == "login":
-        return [sys.executable, "-m", "src.login", "--auto"]
-    trigger = "scheduled" if kind == "scheduled" else "ui"
-    return [
-        sys.executable,
-        "-m",
-        "src.main",
-        "--mode",
-        "headless",
-        "--trigger",
-        trigger,
-    ]
+        command = [sys.executable, switch]
+    else:
+        # The entry point sets sys.path, even when the worker's cwd is data/.
+        entry = Path(__file__).resolve().parents[2] / "scripts/menu_bar_app.py"
+        command = [sys.executable, str(entry), switch]
+    if kind == "scheduled":
+        command.extend(["--mode", "headless", "--trigger", "scheduled"])
+    return command
 
 
 _delegate: MenuBarController | None = None

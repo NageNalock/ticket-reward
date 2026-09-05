@@ -18,6 +18,8 @@ if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
 fi
 
 "${VENV_DIR}/bin/python" -m pip install -r requirements-build.txt
+bash scripts/build_icon.sh
+"${VENV_DIR}/bin/python" scripts/write_build_info.py
 mkdir -p "${BROWSER_DIR}" "${DIST_DIR}"
 PLAYWRIGHT_BROWSERS_PATH="${BROWSER_DIR}" \
   "${VENV_DIR}/bin/python" -m playwright install chromium

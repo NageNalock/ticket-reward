@@ -1,15 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import json
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 ROOT = Path.cwd()
+BUILD_INFO = json.loads((ROOT / "build/build-info.json").read_text(encoding="utf-8"))
 
 datas = [
     (str(ROOT / "config/config.yaml"), "config"),
     (str(ROOT / "config/search_terms.json"), "config"),
+    (str(ROOT / "assets"), "assets"),
+    (str(ROOT / "build/build-info.json"), "."),
 ]
 datas += collect_data_files("playwright")
 datas += collect_data_files("playwright_stealth")
@@ -63,13 +67,13 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="Bing Rewards.app",
-    icon=None,
+    icon=str(ROOT / "assets/AppIcon.icns"),
     bundle_identifier="com.local.bingrewards",
     info_plist={
         "LSUIElement": True,
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "11.0",
-        "CFBundleShortVersionString": "0.4.1",
-        "CFBundleVersion": "4",
+        "CFBundleShortVersionString": BUILD_INFO["version"],
+        "CFBundleVersion": str(BUILD_INFO["build_number"] or 1),
     },
 )

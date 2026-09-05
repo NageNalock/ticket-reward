@@ -1,3 +1,5 @@
 """Bing Rewards automation package."""
 
-__version__ = "0.4.1"
+from src.version import APP_VERSION as __version__
+
+__all__ = ["__version__"]

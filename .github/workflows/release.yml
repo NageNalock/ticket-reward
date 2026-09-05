@@ -1,6 +1,7 @@
 name: Build and release macOS app
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - "**"
@@ -38,7 +39,7 @@ jobs:
           .venv/bin/python -m unittest discover -s tests -v
           .venv/bin/ruff check src tests scripts
 
-      - name: Build signed Apple Silicon app
+      - name: Build ad-hoc signed Apple Silicon app
         run: bash scripts/build_app.sh
 
       - name: Verify bundle and prepare checksums
@@ -47,17 +48,19 @@ jobs:
           test "$(plutil -extract CFBundleShortVersionString raw 'dist/Bing Rewards.app/Contents/Info.plist')" != ""
           file 'dist/Bing Rewards.app/Contents/MacOS/Bing Rewards' | grep -q 'arm64'
           codesign --verify --deep --strict 'dist/Bing Rewards.app'
-          shasum -a 256 dist/Bing-Rewards-macOS-arm64.zip > dist/SHA256SUMS.txt
+          cd dist
+          shasum -a 256 Bing-Rewards-macOS-arm64.zip > SHA256SUMS.txt
 
       - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          TAG="build-${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
+          TAG="$(.venv/bin/python -c 'import json; print(json.load(open("build/build-info.json"))["release_tag"])')"
           gh release create "$TAG" \
             dist/Bing-Rewards-macOS-arm64.zip \
             dist/SHA256SUMS.txt \
             --target "$GITHUB_SHA" \
+            --latest \
             --title "Bing Rewards $TAG" \
             --generate-notes
