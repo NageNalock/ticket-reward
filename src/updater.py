@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import http.client
-import json
 import platform
 import re
 import shutil
@@ -18,13 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.parse import quote, unquote, urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
+from src.utils.release_pages import ReleaseAssetsParser, ReleasePageParser
 from src.version import APP_VERSION, REPOSITORY, InstalledVersion
 
-API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
+LATEST_URL = f"{RELEASES_URL}/latest"
 MAX_ARCHIVE_SIZE = 2 * 1024**3
 TIMEOUT = 20
 
@@ -56,22 +56,36 @@ class Release:
     checksum_url: str = ""
 
 
-def _request(url: str) -> Request:
+def _request(url: str, *, method: str = "GET", html: bool = False) -> Request:
     return Request(url, headers={
-        "Accept": "application/vnd.github+json" if url == API_URL else "application/octet-stream",
+        "Accept": "text/html" if html else "application/octet-stream",
         "User-Agent": f"ticket-reward/{APP_VERSION}",
-        "X-GitHub-Api-Version": "2022-11-28",
-    })
+    }, method=method)
 
 
-def _open(url: str):
+class _KeepHeadRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        # Python versions that reset HEAD to GET would start a CDN download
+        # while we only want Content-Length. Preserve HEAD across every hop.
+        if redirected is not None and req.get_method() == "HEAD":
+            redirected.method = "HEAD"
+        return redirected
+
+
+def _urlopen(request: Request, *, timeout: int, context: ssl.SSLContext):
+    opener = build_opener(_KeepHeadRedirects(), HTTPSHandler(context=context))
+    return opener.open(request, timeout=timeout)
+
+
+def _open(url: str, *, method: str = "GET", html: bool = False):
     context = ssl.create_default_context()
     # A frozen Python may retain the CI machine's OpenSSL certificate path.
     # Also load macOS's system CA bundle so HTTPS works on the recipient's Mac.
     system_ca = Path("/etc/ssl/cert.pem")
     if system_ca.is_file():
         context.load_verify_locations(cafile=str(system_ca))
-    return urlopen(_request(url), timeout=TIMEOUT, context=context)
+    return _urlopen(_request(url, method=method, html=html), timeout=TIMEOUT, context=context)
 
 
 def _network_error(exc: Exception) -> UpdateError:
@@ -102,32 +116,37 @@ def _github_url(value: object, path: str) -> str:
     return value
 
 
-def parse_release(payload: object, machine: str) -> Release:
-    if not isinstance(payload, dict) or not isinstance(payload.get("tag_name"), str):
-        raise UpdateError("GitHub 返回的版本信息无效。")
-    tag = payload["tag_name"]
-    if not tag or payload.get("draft") or payload.get("prerelease"):
-        raise UpdateError("此版本尚未正式发布。")
-    page_url = _github_url(payload.get("html_url"), f"/{REPOSITORY}/releases/tag/{tag}")
+def _select_asset(assets: list, machine: str) -> dict | None:
     architectures = {
         "arm64": ("arm64", "universal2", "universal"),
         "aarch64": ("arm64", "universal2", "universal"),
         "x86_64": ("x86_64", "universal2", "universal"),
         "amd64": ("x86_64", "universal2", "universal"),
     }.get(machine.lower(), ())
-    assets = payload.get("assets")
-    if not isinstance(assets, list):
-        raise UpdateError("GitHub 返回的发布包列表无效。")
     by_name = {
         item.get("name"): item for item in assets
         if isinstance(item, dict) and isinstance(item.get("name"), str)
         and item.get("state") == "uploaded"
     }
-    selected = next((
+    return next((
         by_name[f"Bing-Rewards-macOS-{arch}.{extension}"]
         for extension in ("dmg", "zip") for arch in architectures
         if f"Bing-Rewards-macOS-{arch}.{extension}" in by_name
     ), None)
+
+
+def parse_release(payload: object, machine: str) -> Release:
+    """Validate normalized page metadata before exposing a download."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("tag_name"), str):
+        raise UpdateError("GitHub 返回的版本信息无效。")
+    tag = payload["tag_name"]
+    if not tag or payload.get("draft") or payload.get("prerelease"):
+        raise UpdateError("此版本尚未正式发布。")
+    page_url = _github_url(payload.get("html_url"), f"/{REPOSITORY}/releases/tag/{tag}")
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        raise UpdateError("GitHub 返回的发布包列表无效。")
+    selected = _select_asset(assets, machine)
     asset = None
     checksum_url = ""
     if selected is not None:
@@ -143,7 +162,9 @@ def parse_release(payload: object, machine: str) -> Release:
         if isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
             sha256 = digest.partition(":")[2].lower()
         asset = ReleaseAsset(name, url, size, sha256)
-        checksum = by_name.get("SHA256SUMS.txt")
+        checksum = next((item for item in assets if isinstance(item, dict)
+                         and item.get("name") == "SHA256SUMS.txt"
+                         and item.get("state") == "uploaded"), None)
         if checksum is not None:
             checksum_url = _github_url(
                 checksum.get("browser_download_url"),
@@ -158,12 +179,58 @@ def parse_release(payload: object, machine: str) -> Release:
 
 
 def fetch_latest_release(machine: str | None = None) -> Release | None:
+    """Read public HTML and HEAD metadata only; never GET an installer here."""
     try:
-        raw = _read_small(API_URL, 2 * 1024**2)
-        return parse_release(json.loads(raw), machine or platform.machine())
+        try:
+            response = _open(LATEST_URL, html=True)
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+        with response:
+            page_url = response.geturl()
+            prefix = f"/{REPOSITORY}/releases/tag/"
+            path = unquote(urlsplit(page_url).path)
+            if not path.startswith(prefix):
+                raise UpdateError("无法从 GitHub 发布页确定最新版本。")
+            tag = path[len(prefix):]
+            if not tag or len(tag) > 200 or any(part in (".", "..") for part in tag.split("/")):
+                raise UpdateError("GitHub 返回的版本标签无效。")
+            _github_url(page_url, f"{prefix}{tag}")
+            raw = response.read(2 * 1024**2 + 1)
+        if len(raw) > 2 * 1024**2:
+            raise UpdateError("更新信息过大，已停止读取。")
+        page = ReleasePageParser()
+        page.feed(raw.decode("utf-8"))
+        page.close()
+        assets_url = f"{RELEASES_URL}/expanded_assets/{quote(tag, safe='')}"
+        if unquote(assets_url) not in (unquote(urljoin(page_url, fragment)) for fragment in page.fragments):
+            raise UpdateError("GitHub 发布页格式已变化，请打开发布页查看更新。")
+        with _open(assets_url, html=True) as response:
+            _github_url(response.geturl(), f"/{REPOSITORY}/releases/expanded_assets/{tag}")
+            raw = response.read(2 * 1024**2 + 1)
+        if len(raw) > 2 * 1024**2:
+            raise UpdateError("更新信息过大，已停止读取。")
+        listing = ReleaseAssetsParser()
+        listing.feed(raw.decode("utf-8"))
+        listing.close()
+        architecture = machine or platform.machine()
+        selected = _select_asset(listing.assets, architecture)
+        if selected is not None:
+            url = _github_url(selected["browser_download_url"],
+                              f"/{REPOSITORY}/releases/download/{tag}/{selected['name']}")
+            # The web page rounds sizes to MB. HEAD gets the exact length without
+            # transferring any archive bytes, including across GitHub's CDN redirect.
+            with _open(url, method="HEAD") as response:
+                length = response.headers.get("Content-Length", "")
+            if not re.fullmatch(r"[0-9]{1,10}", length):
+                raise UpdateError("无法读取发布包大小，请稍后重试。")
+            selected["size"] = int(length)
+        return parse_release({
+            "tag_name": tag, "html_url": page_url, "name": page.title,
+            "body": page.notes, "published_at": page.published_at, "assets": listing.assets,
+        }, architecture)
     except HTTPError as exc:
-        if exc.code == 404:
-            return None
         raise _network_error(exc) from exc
     except (URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
         raise _network_error(exc) from exc

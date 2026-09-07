@@ -27,7 +27,7 @@ codesign --verify --deep --strict "${STAGING_DIR}/Bing Rewards.app"
 hdiutil create \
   -volname "Bing Rewards" \
   -fs HFS+ \
-  -format UDZO \
+  -format ULMO \
   -nospotlight \
   -anyowners \
   -srcfolder "${STAGING_DIR}" \

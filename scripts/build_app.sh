@@ -21,7 +21,7 @@ bash scripts/build_icon.sh
 "${VENV_DIR}/bin/python" scripts/write_build_info.py
 mkdir -p "${BROWSER_DIR}" "${DIST_DIR}"
 PLAYWRIGHT_BROWSERS_PATH="${BROWSER_DIR}" \
-  "${VENV_DIR}/bin/python" -m playwright install chromium
+  "${VENV_DIR}/bin/python" -m playwright install --no-shell chromium
 
 rm -rf "${WORK_DIR}" "${APP_PATH}"
 "${VENV_DIR}/bin/pyinstaller" \
@@ -31,10 +31,8 @@ rm -rf "${WORK_DIR}" "${APP_PATH}"
   --distpath "${DIST_DIR}" \
   BingRewards.spec
 
-mkdir -p "${APP_PATH}/Contents/Resources/ms-playwright"
-ditto "${BROWSER_DIR}" "${APP_PATH}/Contents/Resources/ms-playwright"
-# Playwright's installation registry contains paths from the build machine.
-rm -rf "${APP_PATH}/Contents/Resources/ms-playwright/.links"
+"${VENV_DIR}/bin/python" scripts/bundle_browsers.py \
+  "${BROWSER_DIR}" "${APP_PATH}/Contents/Resources/ms-playwright"
 codesign --force --sign - "${APP_PATH}"
 codesign --verify --deep --strict "${APP_PATH}"
 bash scripts/build_dmg.sh

@@ -58,6 +58,8 @@ class BrowserManager:
         logger.debug(f"启动 {mode} 浏览器上下文 (headless={headless})")
         self.context = self.playwright.chromium.launch_persistent_context(
             user_data_dir=str(self.user_data_dir),
+            # Share full Chromium between visible login and the new headless mode.
+            channel="chromium",
             headless=headless,
             viewport=viewport,
             user_agent=self.config["user_agents"][mode],

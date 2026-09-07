@@ -24,7 +24,7 @@ class ActivityBrowserTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.playwright = sync_playwright().start()
         try:
-            cls.browser = cls.playwright.chromium.launch(headless=True)
+            cls.browser = cls.playwright.chromium.launch(channel="chromium", headless=True)
         except Exception:
             cls.playwright.stop()
             raise

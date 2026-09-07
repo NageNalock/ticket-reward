@@ -39,10 +39,13 @@ python3 -m venv .venv
 点击主窗口或菜单栏菜单中的「检查更新」。应用会在后台读取：
 
 ```text
-https://api.github.com/repos/NageNalock/ticket-reward/releases/latest
+https://github.com/NageNalock/ticket-reward/releases/latest
+https://github.com/NageNalock/ticket-reward/releases/expanded_assets/<tag>
 ```
 
-窗口显示最新正式版本、更新说明和安装包大小。点击「下载更新」后可查看进度或取消下载。应用优先使用 GitHub 提供的 `sha256` digest；没有 digest 时读取同一 Release 的 `SHA256SUMS.txt`。只有大小和 SHA-256 都匹配的完整安装包才会出现在最终路径中。
+通过公开网页的跳转确定最新正式版本，再读取更新说明和附件列表，不调用 GitHub REST API，也不需要 GitHub Token。检查阶段对安装包仅发出 `HEAD` 请求获取准确大小，不读取安装包内容。网页接口仍可能暂时限流或改版，遇到异常会提示重试或查看发布页。
+
+窗口显示最新正式版本、更新说明和安装包大小。点击「下载更新」后可查看进度或取消下载。应用优先使用附件列表中的 `sha256` digest；没有 digest 时读取同一 Release 的 `SHA256SUMS.txt`。只有大小和 SHA-256 都匹配的完整安装包才会出现在最终路径中。
 
 下载完成后点击「在 Finder 中显示」，双击打开 DMG，退出应用，再把左侧的 `Bing Rewards.app` 拖到右侧的 `Applications` 文件夹替换。安装后推出磁盘映像。应用不会直接覆盖正在运行的程序。
 
@@ -57,7 +60,7 @@ https://api.github.com/repos/NageNalock/ticket-reward/releases/latest
 - 优先选择适配 `arm64`、`x86_64` 或 `universal2` / `universal` 的 DMG；旧 Release 只有 ZIP 时仍支持下载，解压后安装。缺少匹配架构的包时显示提示。
 - 无正式版本、网络超时、限流、校验失败和取消下载均有独立处理，可重试。
 
-接口与格式依据：[GitHub Releases API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)。
+发布来源：[GitHub 公开发布页](https://github.com/NageNalock/ticket-reward/releases/latest)。
 
 ## 构建与发布
 
@@ -76,7 +79,9 @@ dist/SHA256SUMS.txt
 
 构建脚本自动生成图标和 `build/build-info.json`，并把版本元数据一起放入 `.app`。`src/version.py` 与 `pyproject.toml` 中的应用版本应同步修改。
 
-已有 `.app` 时，可用 `bash scripts/build_dmg.sh` 重新生成 DMG。DMG 为只读压缩映像，包含应用和指向 `/Applications` 的快捷方式，Finder 布局由固定参数生成。打包时不复制本机扩展属性，并排除浏览器安装缓存中的本机路径记录。
+已有 `.app` 时，可用 `bash scripts/build_dmg.sh` 重新生成 DMG。DMG 使用 ULMO / LZMA 压缩，兼容应用要求的 macOS 11 及以上系统；包含应用和指向 `/Applications` 的快捷方式，Finder 布局由固定参数生成。打包时不复制本机扩展属性，并排除浏览器安装缓存中的本机路径记录。
+
+登录窗口和后台任务通过 `channel="chromium"` 共用完整版 Chromium。构建时使用 `--no-shell`，只打包当前 Playwright 选定的 Chromium 和 FFmpeg，不包含独立 headless shell、旧浏览器版本或整个安装缓存。安装包仍内置完整运行环境，首次启动无需另行下载浏览器。参见 [Playwright 新无头模式](https://playwright.dev/python/docs/browsers#chromium-new-headless-mode)。
 
 GitHub Actions 在各分支运行检查与构建，只有 `main` 发布正式 Release。发布标签与应用内嵌标签来自同一份构建元数据。每个 Release 包含：
 
@@ -93,7 +98,7 @@ SHA256SUMS 使用 `64位十六进制摘要  文件名` 格式；更新器也兼�
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/ruff check src tests scripts
 REWARDS_BROWSER_TESTS=1 PLAYWRIGHT_BROWSERS_PATH="$PWD/build/playwright-browsers" \
-  .venv/bin/python -m unittest tests.test_activity_browser -v
+  .venv/bin/python -m unittest tests.test_activity_browser tests.test_browser_runtime -v
 .venv/bin/python scripts/menu_bar_app.py --ui-smoke-test
 .venv/bin/python scripts/menu_bar_app.py --check-update
 ```

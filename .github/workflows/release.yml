@@ -42,11 +42,11 @@ jobs:
       - name: Build ad-hoc signed Apple Silicon app and DMG
         run: bash scripts/build_app.sh
 
-      - name: Verify Rewards activity navigation in Chromium
+      - name: Verify bundled Chromium and Rewards activities
         env:
           REWARDS_BROWSER_TESTS: "1"
-          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/build/playwright-browsers
-        run: .venv/bin/python -m unittest tests.test_activity_browser -v
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/dist/Bing Rewards.app/Contents/Resources/ms-playwright
+        run: .venv/bin/python -m unittest tests.test_activity_browser tests.test_browser_runtime -v
 
       - name: Verify bundle, DMG and checksums
         run: |

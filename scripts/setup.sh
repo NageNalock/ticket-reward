@@ -9,7 +9,7 @@ cd "${PROJECT_DIR}"
 python3 -m venv "${VENV_DIR}"
 "${VENV_DIR}/bin/python" -m pip install --upgrade pip
 "${VENV_DIR}/bin/python" -m pip install -r requirements.txt
-"${VENV_DIR}/bin/python" -m playwright install chromium
+"${VENV_DIR}/bin/python" -m playwright install --no-shell chromium
 mkdir -p data/browser_profile data/logs data/screenshots
 
 if [[ "${1:-}" == "--no-launchd" ]]; then
