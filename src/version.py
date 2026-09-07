@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from src.utils.storage import bundled_path
 
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.4"
 REPOSITORY = "NageNalock/ticket-reward"
 
 

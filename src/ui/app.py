@@ -4,6 +4,8 @@ import os
 import signal
 import subprocess
 import sys
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from datetime import date, datetime
 from pathlib import Path
@@ -46,6 +48,7 @@ from src.ui.history_view import (
 from src.ui.scheduler import calculate_next_run, calculate_retry_run, find_pending_retry
 from src.ui.update_window import UpdateWindowController
 from src.utils.config_loader import load_config
+from src.utils.login_status import LoginState, saved_login_state
 from src.utils.storage import bundled_path, ensure_runtime_dirs, project_path
 from src.version import installed_version
 
@@ -73,6 +76,10 @@ class MenuBarController(NSObject):
         self.retry_cycle_date: date | None = None
         self.active_retry_number = 0
         self.active_schedule_date: date | None = None
+        self.login_state = LoginState.CHECKING
+        self.login_check: Future[LoginState] | None = None
+        self.login_executor: ThreadPoolExecutor | None = None
+        self.next_login_check = 0.0
         return self
 
     def applicationDidFinishLaunching_(self, _notification: Any) -> None:
@@ -94,6 +101,7 @@ class MenuBarController(NSObject):
 
     def applicationWillTerminate_(self, _notification: Any) -> None:
         self._stop_child()
+        self._stop_login_checks()
         if self.update_controller is not None:
             self.update_controller.stop()
 
@@ -180,11 +188,14 @@ class MenuBarController(NSObject):
         activity.addSubview_(theme.label("下次运行", NSMakeRect(24, 115, 280, 20), 12, ink=theme.MUTED))
         self.schedule_label = theme.label("正在安排…", NSMakeRect(23, 79, 350, 34), 25, True, rounded=True)
         activity.addSubview_(self.schedule_label)
-        self.runtime_status = theme.label("就绪", NSMakeRect(24, 22, 355, 48), 12, ink=theme.MUTED)
+        self.login_status_label = theme.label("正在检查登录状态…", NSMakeRect(24, 52, 355, 20), 12, True, theme.MUTED)
+        activity.addSubview_(self.login_status_label)
+        self.runtime_status = theme.label("就绪", NSMakeRect(24, 14, 355, 32), 12, ink=theme.MUTED)
         activity.addSubview_(self.runtime_status)
         self.run_button = theme.button("立即运行", NSMakeRect(411, 86, 139, 38), self, "runNow:", primary=True, symbol="play.fill")
         activity.addSubview_(self.run_button)
         self.login_button = theme.button("登录账号", NSMakeRect(411, 40, 139, 34), self, "loginNow:", symbol="person.crop.circle")
+        self.login_button.setHidden_(True)
         activity.addSubview_(self.login_button)
 
         metrics = theme.panel(NSMakeRect(30, 346, 940, 84))
@@ -257,6 +268,7 @@ class MenuBarController(NSObject):
         content.addSubview_(theme.label("记录仅保存在本机 · 关闭窗口后继续驻留菜单栏", NSMakeRect(32, 26, 630, 20), 11, ink=theme.MUTED))
         content.addSubview_(theme.button("打开配置", NSMakeRect(754, 19, 104, 32), self, "openConfig:", symbol="slider.horizontal.3"))
         content.addSubview_(theme.button("查看日志", NSMakeRect(870, 19, 104, 32), self, "openLogs:", symbol="doc.text"))
+        self._render_login_state()
 
     def numberOfRowsInTableView_(self, _table_view: Any) -> int:
         return len(self.rows)
@@ -284,11 +296,13 @@ class MenuBarController(NSObject):
         cell.setFont_(theme.font(12, identifier in ("status", "earned")))
 
     def showDashboard_(self, _sender: Any) -> None:
+        self._refresh_login_status(force=True)
         self.window.makeKeyAndOrderFront_(None)
         self.window.orderFrontRegardless()
         NSApp.activateIgnoringOtherApps_(True)
 
     def refreshHistory_(self, _sender: Any) -> None:
+        self._refresh_login_status(force=True)
         tracker = PointsTracker()
         self.history_rows = [format_history_row(record) for record in tracker.get_history(50)]
         for label, text in zip(
@@ -320,8 +334,97 @@ class MenuBarController(NSObject):
         self.empty_view.setHidden_(bool(self.rows))
         filtered = bool(self.history_rows)
         self.empty_title.setStringValue_("没有符合条件的记录" if filtered else "第一份积分，从这里开始")
-        self.empty_detail.setStringValue_("切换到「全部」查看其他运行记录。" if filtered else "先登录 Microsoft 账号，再点击「立即运行」。")
+        self.empty_detail.setStringValue_(
+            "切换到「全部」查看其他运行记录。" if filtered else self._empty_login_hint()
+        )
         self.table.reloadData()
+
+    def refreshLoginStatus_(self, _sender: Any) -> None:
+        self._refresh_login_status(force=True)
+
+    @objc.python_method
+    def _empty_login_hint(self) -> str:
+        if self.login_state == LoginState.LOGGED_IN:
+            return "账号已登录，点击「立即运行」开始积累积分。"
+        if self.login_state == LoginState.UNAVAILABLE:
+            return "暂时无法确认登录状态，请点击「重新检测」。"
+        if self.login_state == LoginState.CHECKING:
+            return "正在确认已保存的登录会话。"
+        if self.login_state == LoginState.LOGGING_IN:
+            return "请在打开的浏览器中完成 Microsoft 登录。"
+        return "先登录 Microsoft 账号，再点击「立即运行」。"
+
+    @objc.python_method
+    def _set_login_state(self, state: LoginState) -> None:
+        self.login_state = state
+        self._render_login_state()
+
+    @objc.python_method
+    def _render_login_state(self) -> None:
+        labels = {
+            LoginState.CHECKING: ("正在检查登录状态…", theme.MUTED),
+            LoginState.LOGGED_IN: ("已登录", theme.ACCENT),
+            LoginState.LOGGED_OUT: ("未登录", theme.MUTED),
+            LoginState.EXPIRED: ("登录已失效", theme.WARNING),
+            LoginState.UNAVAILABLE: ("登录状态暂不可用", theme.WARNING),
+            LoginState.LOGGING_IN: ("正在登录…", theme.ACCENT),
+        }
+        text, ink = labels[self.login_state]
+        self.login_status_label.setStringValue_(text)
+        self.login_status_label.setTextColor_(theme.color(ink))
+        titles = {
+            LoginState.LOGGED_OUT: ("登录账号", "登录 Microsoft 账号"),
+            LoginState.EXPIRED: ("重新登录", "重新登录 Microsoft 账号"),
+            LoginState.UNAVAILABLE: ("重新检测", "重新检测登录状态"),
+            LoginState.LOGGING_IN: ("登录中…", "正在登录…"),
+        }
+        title, menu_title = titles.get(self.login_state, ("登录账号", text))
+        action = "refreshLoginStatus:" if self.login_state == LoginState.UNAVAILABLE else "loginNow:"
+        visible = self.login_state in titles
+        enabled = visible and self.process is None and self.login_state != LoginState.LOGGING_IN
+        self.login_button.setTitle_(title)
+        self.login_button.setAction_(action)
+        self.login_button.setHidden_(not visible)
+        self.login_button.setEnabled_(enabled)
+        self.login_menu_item.setTitle_(menu_title)
+        self.login_menu_item.setAction_(action if enabled else None)
+        self.login_menu_item.setEnabled_(enabled)
+        if hasattr(self, "empty_detail") and not self.history_rows:
+            self.empty_detail.setStringValue_(self._empty_login_hint())
+
+    @objc.python_method
+    def _refresh_login_status(self, *, force: bool = False) -> None:
+        if self.smoke_test:
+            return
+        if self.process is not None and self.process_kind == "login":
+            return
+        if self.login_check is not None:
+            if not self.login_check.done():
+                return
+            try:
+                state = self.login_check.result()
+            except Exception:
+                state = LoginState.UNAVAILABLE
+            self.login_check = None
+            self.next_login_check = time.monotonic() + 5
+            self._set_login_state(state)
+            return
+        if not force and time.monotonic() < self.next_login_check:
+            return
+        if self.login_state == LoginState.UNAVAILABLE:
+            self._set_login_state(LoginState.CHECKING)
+        if self.login_executor is None:
+            self.login_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="login-status")
+        self.login_check = self.login_executor.submit(saved_login_state)
+
+    @objc.python_method
+    def _stop_login_checks(self) -> None:
+        if self.login_check is not None:
+            self.login_check.cancel()
+            self.login_check = None
+        if self.login_executor is not None:
+            self.login_executor.shutdown(wait=False, cancel_futures=True)
+            self.login_executor = None
 
     def checkUpdates_(self, _sender: Any) -> None:
         if self.update_controller is None:
@@ -332,6 +435,9 @@ class MenuBarController(NSObject):
         self._start_child("run")
 
     def loginNow_(self, _sender: Any) -> None:
+        if self.login_state == LoginState.LOGGED_IN:
+            self._refresh_login_status(force=True)
+            return
         self._start_child("login")
 
     @objc.python_method
@@ -362,6 +468,14 @@ class MenuBarController(NSObject):
                 self._schedule_next_run()
             return
         self.process_kind = kind
+        if kind == "login":
+            # Ignore a pre-login check that may still be reading the old session.
+            if self.login_check is not None:
+                self.login_check.cancel()
+                self.login_check = None
+            self._set_login_state(LoginState.LOGGING_IN)
+        else:
+            self._render_login_state()
         self.process_started_at = datetime.now()
         self.live_progress = "正在打开登录浏览器" if kind == "login" else "正在启动"
         self.run_button.setEnabled_(False)
@@ -373,6 +487,7 @@ class MenuBarController(NSObject):
         self._update_running_row()
 
     def pollProcess_(self, _timer: Any) -> None:
+        self._refresh_login_status()
         if self.process is None:
             if not self.smoke_test:
                 self._maybe_start_scheduled_run()
@@ -397,9 +512,11 @@ class MenuBarController(NSObject):
             self.process_log.close()
             self.process_log = None
         self.run_button.setEnabled_(True)
-        self.login_button.setEnabled_(True)
         self.run_menu_item.setEnabled_(True)
-        self.login_menu_item.setEnabled_(True)
+        if kind == "login":
+            self._set_login_state(LoginState.LOGGED_IN if return_code == 0 else LoginState.CHECKING)
+        else:
+            self._render_login_state()
         self.refreshHistory_(None)
         action = "登录" if kind == "login" else "任务"
         result = "完成" if return_code == 0 else f"失败（退出码 {return_code}）"
@@ -577,6 +694,7 @@ class MenuBarController(NSObject):
 
     def quitApplication_(self, _sender: Any) -> None:
         self._stop_child()
+        self._stop_login_checks()
         NSApp.terminate_(None)
 
     def quitForSmoke_(self, _sender: Any) -> None:
