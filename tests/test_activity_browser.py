@@ -182,6 +182,82 @@ class ActivityBrowserTests(unittest.TestCase):
           <span class="point_cont"><span class="checkmark">✓5</span></span></div>""")
         self.assertFalse(PanelParser(self.page).parse_tasks()[0].completed)
 
+    def test_locks_are_scoped_to_the_offer_and_ignore_hidden_or_unlocked_icons(self) -> None:
+        content = '<span class="promo-title">探索锁的历史</span><span class="point_cont">+10</span>'
+        cases = [
+            ('<a class="promo_cont promo_locked">CONTENT</a>', False),
+            ('<a class="promo_cont offerLocked">CONTENT</a>', False),
+            ('<a class="promo_cont" aria-disabled="true">CONTENT</a>', False),
+            ('<a class="promo_cont" disabled>CONTENT</a>', False),
+            ('<a class="promo_cont">CONTENT<i class="promo_lock">🔒</i></a>', False),
+            ('<a class="promo_cont">CONTENT<i class="lockIcon" aria-hidden="true">🔒</i></a>', False),
+            ('<a class="locked"><div class="promo_cont">CONTENT</div></a>', False),
+            ('<div class="promo_wrapper"><i class="lock_icon">🔒</i>'
+             '<a><div class="promo_cont">CONTENT</div></a></div>', False),
+            ('<a class="promo_cont">CONTENT<i class="lock" hidden>🔒</i>'
+             '<i class="lock_icon">🔒</i></a>', False),
+            ('<a class="promo_cont">CONTENT<i aria-label="Locked">🔒</i></a>', False),
+            ('<a class="promo_cont">CONTENT<i aria-label="Locked activity">🔒</i></a>', False),
+            ('<a class="promo_cont">CONTENT<i aria-label="锁">🔒</i></a>', False),
+            ('<a class="promo_cont">CONTENT<i aria-label="未解锁">🔒</i></a>', False),
+            ('<a class="promo_cont unlocked" aria-label="Offer unlocked">CONTENT'
+             '<i class="unlock_icon" aria-label="已解锁">🔓</i></a>', True),
+            ('<a class="promo_cont">CONTENT<i aria-label="Unlocked">🔓</i></a>', True),
+            ('<a class="promo_cont">CONTENT<i class="lock" hidden>🔒</i></a>', True),
+            ('<a class="promo_cont">CONTENT<span style="display:none">'
+             '<i class="lock">🔒</i></span></a>', True),
+            ('<a class="promo_cont">CONTENT<i class="lock" style="opacity:0">🔒</i></a>', True),
+        ]
+        for markup, available in cases:
+            with self.subTest(markup=markup):
+                self.page.set_content(
+                    '<div class="promo_list">' + markup.replace("CONTENT", content) +
+                    '<a class="promo_cont"><span class="promo-title">旁边的正常活动</span>'
+                    '<span class="point_cont">+5</span></a></div>'
+                )
+                cards = PanelParser(self.page).parse_tasks()
+                self.assertEqual(len(cards), 2)
+                self.assertEqual(cards[0].available, available)
+                self.assertTrue(cards[1].available)
+
+    def test_goals_and_progress_are_not_offers_but_rewarded_goal_topics_are(self) -> None:
+        self.page.set_content("""
+          <a class="promo_cont" href="https://rewards.bing.com/redeem/goal">
+            <span class="promo-title">目标: 示例消费券</span>
+            <span class="promo-desc">10,000 / 35,000 积分</span></a>
+          <a class="promo_cont" href="https://rewards.bing.com/redeem/goal">
+            <span class="promo-title">Goal: Puzzle gift</span>
+            <span class="point_cont">500</span></a>
+          <div class="promo_cont"><span class="promo-title">每日搜索</span>
+            <span class="promo-desc">30 / 90 积分</span></div>
+          <div class="promo_cont"><span class="promo-title">正在进行中!</span>
+            <span class="point_cont">+10</span></div>
+          <a class="promo_cont" href="/search?q=goals">
+            <span class="promo-title">了解目标设定</span><span class="point_cont">+10</span></a>
+          <a class="promo_cont" href="/search?q=habits">
+            <span class="promo-title">Goal: Healthy habits</span><span class="point_cont">+10</span></a>
+        """)
+        cards = PanelParser(self.page).parse_tasks()
+        self.assertEqual([card.title for card in cards], ["了解目标设定", "Goal: Healthy habits"])
+        self.assertTrue(all(card.points == 10 for card in cards))
+
+    @patch("src.tasks.daily_activities.random_delay")
+    def test_only_locked_and_video_offers_produce_skips_without_visiting(self, *_: object) -> None:
+        html = FIXTURE.with_name("rewards_locked_panel.html").read_text()
+        with patch.object(self, "panel_html", return_value=html):
+            result = self.runner().run()
+
+        self.assertEqual(result, {
+            "completed": [], "failed": [],
+            "skipped": [
+                "探索新知识 (未解锁)", "今日灵感 (未解锁)", "明日视频 (未解锁)",
+                "观看最新视频 (暂不支持视频任务)", "今日问答 (已完成)", "推荐朋友 (配置跳过)",
+            ],
+        })
+        self.assertEqual(self.visited, [])
+        self.assertEqual(self.completed, set())
+        self.assertEqual(self.invites, 0)
+
     @patch("src.tasks.daily_activities.random_delay")
     @patch("src.tasks.visit.random_delay")
     def test_runner_completes_daily_visit_and_extra_quiz_without_sending_invites(

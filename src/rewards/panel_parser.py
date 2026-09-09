@@ -358,8 +358,19 @@ class PanelParser:
                 text = card.inner_text(timeout=1_500).strip()
                 if not text or (not structured and not self._looks_like_task(text)):
                     continue
+                # A redemption goal can contain task-like words in its gift name.
+                if card.locator(".goal_overlay").count():
+                    continue
                 candidate = self._parse_card(card, text)
                 if STATUS_TEXT_PATTERN.fullmatch(candidate.title.strip()):
+                    continue
+                # The same promo container also holds redemption goals and search
+                # progress. A container alone is not evidence of an earning offer.
+                if re.match(r"^(?:目标|goal)\s*[:：]", candidate.title, re.IGNORECASE) and (
+                    not candidate.points or urlsplit(candidate.href).path.startswith("/redeem")
+                ):
+                    continue
+                if candidate.task_type == "unknown" and not candidate.points:
                     continue
                 parsed.append(candidate)
             except Exception:
@@ -440,16 +451,6 @@ class PanelParser:
         }""")
         href = identity["href"]
 
-        metadata = " ".join(
-            filter(
-                None,
-                (
-                    text,
-                    card.get_attribute("aria-label") or "",
-                    card.get_attribute("class") or "",
-                ),
-            )
-        ).lower()
         aria_label = card.get_attribute("aria-label") or ""
         completed = offer_is_completed(aria_label)
         explicitly_pending = "not completed" in aria_label.lower() or "未完成" in aria_label
@@ -460,26 +461,61 @@ class PanelParser:
                 checkmark = point_chip.locator("[class*='checkmark' i]").first
                 completed = completed or bool(checkmark.count() and checkmark.is_visible())
                 completed = completed or bool(re.match(r"\s*[✓✔]", point_chip.inner_text()))
-        locked = bool(re.search(r"\b(?:locked|disabled)\b|已锁定", metadata))
-        aria_disabled = (card.get_attribute("aria-disabled") or "").lower() == "true"
-        lock_marker = card.locator(
-            "[aria-label*='lock' i], [aria-label*='锁'], "
-            "[class~='lock' i], [class~='locked' i], [class*='lock-icon' i]"
-        ).first
-        has_lock_marker = bool(lock_marker.count() and lock_marker.is_visible())
-
         return TaskCard(
             title=title,
             description=description,
             points=points,
             task_type=classify_task(title, description, href, points=points),
             element=card,
-            available=not (locked or aria_disabled or has_lock_marker),
+            available=not self._card_is_locked(card),
             completed=completed,
             task_id=task_identity(identity["offerId"], identity["domId"], href),
             section=identity["section"],
             href=href,
         )
+
+    def _card_is_locked(self, card: Any) -> bool:
+        return bool(card.evaluate(r"""(node, offerSelector) => {
+            // Include the enclosing offer link/wrapper, but never a neighbouring
+            // offer's lock or the surrounding list's decorative icons.
+            const hasOtherOffer = parent => [...parent.querySelectorAll(offerSelector)]
+                .some(other => other !== node && !node.contains(other) && !other.contains(node));
+            let scope = node;
+            for (let parent = node.parentElement; parent &&
+                parent.matches('a, [role="link"], [class*="promo" i]'); parent = parent.parentElement) {
+                if (hasOtherOffer(parent)) break;
+                scope = parent;
+            }
+            const words = value => (value || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+            const lockClass = element => /(?:^|[\s_-])lock(?:ed)?(?:$|[\s_-])/.test(
+                words(element.getAttribute('class')));
+            const lockedLabel = element => ['aria-label', 'title'].some(attribute =>
+                /(?:^lock(?:ed)?(?:\s+(?:icon|offer|task|activity))?$|\b(?:offer|task|activity)(?:\s+is)?\s+locked\b|^(?:锁|锁定)$|未解锁|已锁定)/i
+                    .test((element.getAttribute(attribute) || '').trim()));
+            for (let element = node; element; element = element.parentElement) {
+                if (element.getAttribute('aria-disabled')?.toLowerCase() === 'true' ||
+                    element.hasAttribute('disabled') || lockClass(element) || lockedLabel(element) ||
+                    /(?:^|[\s_-])disabled(?:$|[\s_-])/.test(words(element.getAttribute('class')))) {
+                    return true;
+                }
+                if (element === scope) break;
+            }
+            const visible = element => {
+                if (!element.getClientRects().length) return false;
+                for (let current = element; current; current = current.parentElement) {
+                    const style = getComputedStyle(current);
+                    if (style.display === 'none' || style.visibility === 'hidden' ||
+                        style.visibility === 'collapse' || style.opacity === '0') return false;
+                    if (current === scope) break;
+                }
+                return true;
+            };
+            // Bing uses locked_overlay / locked_img (the slim cards only have
+            // the image). A hidden placeholder must not mask a later visible lock,
+            // and "unlocked" / "已解锁" must not match a lock substring.
+            return [...scope.querySelectorAll('[class], [aria-label], [title]')].some(element =>
+                (lockClass(element) || lockedLabel(element)) && visible(element));
+        }""", self.OFFER_CARD_SELECTOR))
 
     @staticmethod
     def _content_lines(text: str) -> list[str]:

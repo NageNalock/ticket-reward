@@ -58,8 +58,9 @@ class DailyActivitiesTask:
                 if title_counts[label] > 1:
                     section = "每日设置" if original.section == "daily" else "额外活动"
                     label = f"{label}（{section}，第 {index} 项）"
-                if original.completed:
-                    results["skipped"].append(f"{label} (已完成)")
+                reason = self._skip_reason(original)
+                if reason:
+                    results["skipped"].append(f"{label} ({reason})")
                     continue
                 task = self._rebind_task(page, parser, original)
                 if task is None:
@@ -68,17 +69,9 @@ class DailyActivitiesTask:
                     else:
                         results["failed"].append(f"{label} (卡片无法唯一匹配)")
                     continue
-                if task.completed:
-                    results["skipped"].append(f"{label} (已完成)")
-                    continue
-                if not task.available:
-                    results["skipped"].append(f"{label} (未解锁)")
-                    continue
-                if task.task_type in self.config["daily_activities"].get("skip_types", []):
-                    results["skipped"].append(f"{label} (配置跳过)")
-                    continue
-                if task.task_type not in {"keyword_search", "puzzle", "quiz", "visit"}:
-                    results["failed"].append(f"{label} (不支持 {task.task_type})")
+                reason = self._skip_reason(task)
+                if reason:
+                    results["skipped"].append(f"{label} ({reason})")
                     continue
 
                 try:
@@ -96,6 +89,21 @@ class DailyActivitiesTask:
             return results
         finally:
             page.close()
+
+    def _skip_reason(self, task: TaskCard) -> str:
+        # Skip before rebinding: unavailable offers can disappear or have no
+        # actionable link, and must not turn into a matching/verification failure.
+        if task.completed:
+            return "已完成"
+        if not task.available:
+            return "未解锁"
+        if task.task_type == "video":
+            return "暂不支持视频任务"
+        if task.task_type in self.config["daily_activities"].get("skip_types", []):
+            return "配置跳过"
+        if task.task_type not in {"keyword_search", "puzzle", "quiz", "visit"}:
+            return f"不支持 {task.task_type}"
+        return ""
 
     @staticmethod
     def _rebind_task(page: Any, parser: PanelParser, original: TaskCard) -> TaskCard | None:

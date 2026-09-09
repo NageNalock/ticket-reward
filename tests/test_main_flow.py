@@ -1,14 +1,48 @@
 from __future__ import annotations
 
 import argparse
+import tempfile
 import unittest
 from contextlib import nullcontext
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.main import main, run
+from src.main import build_parser, main, run
+from src.rewards.points_tracker import PointsTracker
 
 
 class MainFlowTests(unittest.TestCase):
+    def test_only_skipped_activities_record_success_and_return_zero_for_scheduler(self) -> None:
+        args = build_parser().parse_args(["--skip-pc", "--skip-mobile", "--trigger", "scheduled"])
+        skipped = ["明日探索 (未解锁)", "观看影片 (暂不支持视频任务)"]
+        config = {"search": {"pc_count": 0, "mobile_count": 0}, "daily_activities": {"enabled": True}}
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = PointsTracker(Path(directory) / "history.json")
+            with (
+                patch("src.main.ensure_runtime_dirs"),
+                patch("src.main.load_config", return_value=config),
+                patch("src.main._load_search_terms", return_value=["测试"]),
+                patch("src.main.project_path", return_value=MagicMock()),
+                patch("src.main._read_points", return_value=100),
+                patch("src.main.send_notification"),
+                patch("src.main.PointsTracker", return_value=tracker),
+                patch("src.main.BrowserManager") as browser_class,
+                patch("src.main.DailyActivitiesTask") as daily_class,
+            ):
+                browser_class.return_value.is_logged_in.return_value = True
+                browser_class.return_value.mode = "pc"
+                daily_class.return_value.run.return_value = {
+                    "completed": [], "failed": [], "skipped": skipped,
+                }
+                self.assertEqual(run(args), 0)
+            record = PointsTracker(tracker.history_path).get_history(1)[0]
+
+        self.assertEqual(record["status"], "success")
+        self.assertEqual(record["trigger"], "scheduled")
+        self.assertEqual(record["tasks_completed"], [])
+        self.assertEqual(record["tasks_failed"], [])
+        self.assertEqual(record["tasks_skipped"], skipped)
+
     def test_daily_set_runs_before_searches(self) -> None:
         args = argparse.Namespace(
             mode=None,

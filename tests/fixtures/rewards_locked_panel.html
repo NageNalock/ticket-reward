@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  .promo_cont { position: relative; display: block; margin: 8px; padding: 16px; }
+  .promo-title, .promo-desc, .point_cont { display: block; }
+  .locked_overlay { position: absolute; inset: 0; background: #ddd; }
+  .locked_img { display: block; width: 18px; height: 18px; }
+</style>
+<!-- Synthetic content reproducing the flyout's full and slim locked cards.
+     Repeated exclusive_promo_cont IDs and missing aria-disabled are intentional. -->
+<div class="card_container">
+  <div class="flyout_control_halfUnit">
+    <div class="promo_cont">
+      <a class="block goal_overlay" title="InProgressGoal" href="/test-visit?offer=goal">
+        <div class="fp_row align-top promo_card">
+          <p class="b_subtitle goal_title">测验主题礼品卡</p>
+          <div class="goal_progress">1,000 / 10,000</div>
+          <div class="goal_text promo-desc">还差 9,000 分</div>
+        </div>
+      </a>
+    </div>
+  </div>
+  <div class="flyout_control_halfUnit">
+    <div class="promo_cont" id="exclusive_promo_cont">
+      <div class="locked_overlay"></div><img class="locked_img" alt="">
+      <a class="block" href="/test-visit?offer=locked-full">
+        <div class="promo_card ex_img_center">
+          <span class="promo-title">探索新知识</span>
+          <div class="locked_point"><span class="point_cont">+10</span></div>
+          <div class="locked_level_required_text" role="status"><span>等级尚未解锁</span></div>
+        </div>
+      </a>
+    </div>
+  </div>
+  <div class="flyout_control_halfUnit">
+    <div class="promo_cont" id="exclusive_promo_cont">
+      <img class="locked_img" alt="">
+      <a class="block" href="/test-visit?offer=locked-slim">
+        <div class="fp_row_slim promo_card">
+          <span class="promo-title">今日灵感</span><span class="point_cont">+15</span>
+        </div>
+      </a>
+    </div>
+  </div>
+  <div class="flyout_control_halfUnit">
+    <div class="promo_cont" id="exclusive_promo_cont">
+      <div class="locked_overlay"></div><img class="locked_img" alt="">
+      <a class="block" href="/test-visit?offer=locked-video">
+        <span class="promo-title">明日视频</span><span class="point_cont">+10</span>
+      </a>
+    </div>
+  </div>
+  <div class="promo_cont" aria-label="观看最新视频 - Offer not Completed">
+    <a class="block" href="/test-visit?offer=video">
+      <span class="promo-title">观看最新视频</span><span class="point_cont">+10</span>
+    </a>
+  </div>
+  <div class="promo_cont slim" aria-label="今日问答 - Offer is Completed">
+    <a class="block" href="/test-quiz?offer=completed">
+      <span class="promo-title">今日问答</span><span class="point_cont">✓5</span>
+    </a>
+  </div>
+  <div class="promo_cont">
+    <a class="block" href="/test-invite">
+      <span class="promo-title">推荐朋友</span><span class="promo-desc">邀请计划介绍</span>
+    </a>
+  </div>
+  <div class="promo_cont">
+    <span class="promo-title">每日搜索</span><span class="promo-desc">30 / 90 积分</span>
+  </div>
+</div>

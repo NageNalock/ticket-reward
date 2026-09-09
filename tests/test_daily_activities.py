@@ -44,6 +44,55 @@ class DailyActivitiesTests(unittest.TestCase):
 
     @patch("src.tasks.daily_activities.random_delay")
     @patch("src.tasks.daily_activities.PanelParser")
+    def test_locked_and_unsupported_video_cards_are_skipped_before_rebinding(
+        self, parser_class: MagicMock, _delay: MagicMock
+    ) -> None:
+        parser = parser_class.return_value
+        parser.open_panel.return_value = True
+        parser.parse_tasks.return_value = [
+            TaskCard("锁定活动", "", 10, "visit", MagicMock(), available=False),
+            TaskCard("锁定视频", "", 10, "video", MagicMock(), available=False),
+            TaskCard("观看视频", "", 10, "video", MagicMock()),
+        ]
+        runner = DailyActivitiesTask(MagicMock(), {"daily_activities": {}})
+        runner._rebind_task = MagicMock(return_value=None)
+        runner._run_task = MagicMock()
+        runner._wait_for_completion = MagicMock()
+
+        result = runner.run()
+
+        self.assertEqual(result["skipped"], [
+            "锁定活动 (未解锁)", "锁定视频 (未解锁)", "观看视频 (暂不支持视频任务)",
+        ])
+        self.assertEqual(result["completed"], [])
+        self.assertEqual(result["failed"], [])
+        runner._rebind_task.assert_not_called()
+        runner._run_task.assert_not_called()
+        runner._wait_for_completion.assert_not_called()
+
+    @patch("src.tasks.daily_activities.random_delay")
+    @patch("src.tasks.daily_activities.PanelParser")
+    def test_card_that_becomes_locked_after_scanning_is_also_skipped(
+        self, parser_class: MagicMock, _delay: MagicMock
+    ) -> None:
+        original = TaskCard("今日探索", "", 10, "visit", MagicMock(), task_id="one")
+        parser = parser_class.return_value
+        parser.open_panel.return_value = True
+        parser.parse_tasks.side_effect = [[original], [replace(original, available=False)]]
+        runner = DailyActivitiesTask(MagicMock(), {"daily_activities": {}})
+        runner._run_task = MagicMock()
+        runner._wait_for_completion = MagicMock()
+
+        result = runner.run()
+
+        self.assertEqual(result["skipped"], ["今日探索 (未解锁)"])
+        self.assertEqual(result["completed"], [])
+        self.assertEqual(result["failed"], [])
+        runner._run_task.assert_not_called()
+        runner._wait_for_completion.assert_not_called()
+
+    @patch("src.tasks.daily_activities.random_delay")
+    @patch("src.tasks.daily_activities.PanelParser")
     def test_daily_card_skipped_by_config_is_neither_completed_nor_failed(
         self, parser_class: MagicMock, _delay: MagicMock
     ) -> None:
