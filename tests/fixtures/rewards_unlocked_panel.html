@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  .promo_cont { position: relative; display: block; margin: 8px; padding: 16px; }
+  .promo-title, .promo-desc, .point_cont { display: block; }
+  .locked_img { display: block; width: 18px; height: 18px; }
+  .locked_overlay { position: absolute; inset: 0; background: #ddd; }
+  .unlocked_tooltip { visibility: hidden; }
+</style>
+<!-- Synthetic offers reproduce Bing's shared locked_img class on open padlocks. -->
+<div class="card_container">
+  <div class="flyout_control_halfUnit">
+    <div class="promo_cont" id="exclusive_promo_cont">
+      <img class="locked_img" alt="已解锁图像"
+           src="/rewardscdn/images/rewards/exclusivelocked/flyout_unlocked_new.svg">
+      <div class="unlocked_tooltip"><span>已解锁的专属活动</span></div>
+      <a class="block" href="https://www.bing.com/search?q=notebooks&amp;offer=unlocked-one" target="_blank">
+        <div class="promo_card">
+          <span class="promo-title">创意笔记灵感</span>
+          <span class="promo-desc">探索整理想法的方法</span>
+          <span class="point_cont">+15</span>
+        </div>
+      </a>
+    </div>
+  </div>
+  <div class="flyout_control_halfUnit">
+    <div class="promo_cont" id="exclusive_promo_cont">
+      <img class="locked_img" alt="已解锁图像"
+           src="/rewardscdn/images/rewards/exclusivelocked/flyout_unlocked_new.svg">
+      <div class="unlocked_tooltip"><span>已解锁的专属活动</span></div>
+      <a class="block" href="https://www.bing.com/search?q=wildlife&amp;offer=unlocked-two" target="_blank">
+        <div class="promo_card">
+          <span class="promo-title">认识野生动物</span>
+          <span class="promo-desc">了解动物的生活习性</span>
+          <span class="point_cont">+15</span>
+        </div>
+      </a>
+    </div>
+  </div>
+  <div class="flyout_control_halfUnit">
+    <div class="promo_cont" id="exclusive_promo_cont">
+      <div class="locked_overlay"></div><img class="locked_img" alt="已锁定图像">
+      <a class="block" href="https://www.bing.com/search?q=tomorrow&amp;offer=locked" target="_blank">
+        <span class="promo-title">尚未开放的活动</span><span class="point_cont">+15</span>
+      </a>
+    </div>
+  </div>
+</div>
+<script>
+  const completedOffers = __COMPLETED_OFFERS__;
+  for (const card of document.querySelectorAll('.promo_cont')) {
+    const offer = new URL(card.querySelector('a[href]').href).searchParams.get('offer');
+    if (!completedOffers.includes(offer)) continue;
+    card.setAttribute('aria-label', 'Offer is Completed');
+    card.querySelector('.point_cont').textContent = '✓15';
+  }
+</script>

@@ -71,6 +71,11 @@ class ActivityBrowserTests(unittest.TestCase):
             html = (
                 """<h1>推荐活动介绍</h1><button onclick="fetch('/test-invite')">发送邀请</button>"""
             )
+        elif url.path == "/search":
+            self.visited.append(offer)
+            if self.credit_visits:
+                self.completed.add(offer)
+            html = '<div id="b_results">测试搜索结果</div>'
         elif url.path == "/test-quiz":
             self.visited.append(offer)
             html = f"""<h1>测试问题</h1><button role="option" onclick="
@@ -240,6 +245,82 @@ class ActivityBrowserTests(unittest.TestCase):
         cards = PanelParser(self.page).parse_tasks()
         self.assertEqual([card.title for card in cards], ["了解目标设定", "Goal: Healthy habits"])
         self.assertTrue(all(card.points == 10 for card in cards))
+
+    def test_shared_lock_image_class_reads_the_badge_state(self) -> None:
+        asset = "/rewardscdn/images/rewards/exclusivelocked/flyout_unlocked_new.svg"
+        cases = [
+            ('alt="已解锁图像"', True),
+            ('alt="Unlocked image"', True),
+            ('alt="已解鎖圖像"', True),
+            ('aria-label="Unlocked"', True),
+            ('title="已解锁"', True),
+            (f'src="{asset}"', True),
+            (f'alt="Freigeschaltet" src="https://rewards.bing.com{asset}?v=2"', True),
+            ('alt="已锁定图像"', False),
+            ('alt="Locked image"', False),
+            (f'alt="Not unlocked" src="{asset}"', False),
+            (f'alt="Not yet unlocked" src="{asset}"', False),
+            (f'alt="未解锁" src="{asset}"', False),
+            (f'alt="已锁定图像" src="{asset}"', False),
+            ('src="/exclusivelocked/flyout_locked.svg?state=unlocked"', False),
+            ('src="/flyout_unlocked_new.svg/locked.svg"', False),
+            ('src="/unknown.svg"', False),
+            ('', False),
+        ]
+        for attributes, available in cases:
+            with self.subTest(attributes=attributes):
+                self.page.set_content(f"""<base href="https://rewards.bing.com/">
+                  <div class="promo_cont" id="exclusive_promo_cont">
+                  <img class="locked_img" width="18" height="18" {attributes}>
+                  <a href="/search?q=example"><span class="promo-title">专属活动</span>
+                    <span class="point_cont">+15</span></a></div>""")
+                card = PanelParser(self.page).parse_tasks()[0]
+                self.assertEqual(card.available, available)
+                self.assertFalse(card.completed)
+
+    def test_open_padlock_does_not_override_a_disabled_card_or_another_visible_lock(self) -> None:
+        badge = '<img class="locked_img" alt="已解锁图像" width="18" height="18">'
+        content = '<span class="promo-title">专属活动</span><span class="point_cont">+15</span>'
+        cases = [
+            ('<div class="promo_cont" aria-disabled="true">CONTENT BADGE</div>', False),
+            ('<div class="promo_cont promo_locked">CONTENT BADGE</div>', False),
+            ('<div class="promo_cont">CONTENT BADGE<div class="locked_overlay">🔒</div></div>', False),
+            ('<div class="promo_cont">CONTENT BADGE'
+             '<img class="locked_img" alt="Locked image" width="18" height="18"></div>', False),
+            ('<div class="promo_cont">CONTENT BADGE'
+             '<img class="locked_img" alt="Locked image" hidden></div>', True),
+        ]
+        for markup, available in cases:
+            with self.subTest(markup=markup):
+                self.page.set_content(markup.replace("CONTENT", content).replace("BADGE", badge))
+                self.assertEqual(PanelParser(self.page).parse_tasks()[0].available, available)
+
+    @patch("src.tasks.daily_activities.random_delay")
+    @patch("src.tasks.keyword_search.random_delay")
+    @patch("src.tasks.keyword_search.smooth_scroll")
+    def test_runner_executes_open_padlock_offers_and_verifies_credit(self, *_: object) -> None:
+        fixture = FIXTURE.with_name("rewards_unlocked_panel.html").read_text()
+
+        def render() -> str:
+            return fixture.replace("__COMPLETED_OFFERS__", json.dumps(sorted(self.completed)))
+
+        with patch.object(self, "panel_html", side_effect=render):
+            self.page.goto("https://www.bing.com/")
+            parser = PanelParser(self.page)
+            self.assertTrue(parser.open_panel())
+            cards = parser.parse_tasks()
+            self.assertEqual([card.available for card in cards], [True, True, False])
+            self.assertTrue(all(card.task_type == "keyword_search" and card.points == 15 for card in cards))
+            self.assertTrue(all(not card.completed for card in cards))
+            result = self.runner().run()
+
+        self.assertEqual(self.visited, ["unlocked-one", "unlocked-two"])
+        self.assertEqual(self.completed, {"unlocked-one", "unlocked-two"})
+        self.assertEqual(result, {
+            "completed": ["创意笔记灵感", "认识野生动物"], "failed": [],
+            "skipped": ["尚未开放的活动 (未解锁)"],
+        })
+        self.assertEqual(self.invites, 0)
 
     @patch("src.tasks.daily_activities.random_delay")
     def test_only_locked_and_video_offers_produce_skips_without_visiting(self, *_: object) -> None:

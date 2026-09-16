@@ -487,8 +487,29 @@ class PanelParser:
                 scope = parent;
             }
             const words = value => (value || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
-            const lockClass = element => /(?:^|[\s_-])lock(?:ed)?(?:$|[\s_-])/.test(
-                words(element.getAttribute('class')));
+            const unlockedBadge = element => {
+                // Bing keeps locked_img on both the closed and open padlock.
+                // Read the badge's state, not just its shared styling class.
+                if (!element.matches('img.locked_img')) return false;
+                const labels = ['alt', 'aria-label', 'title'].map(attribute =>
+                    (element.getAttribute(attribute) || '').trim());
+                if (labels.some(label => /\bnot(?:\s+yet)?\s+unlocked\b|^locked(?:\s+image)?$|未解锁|未解鎖|已锁定|已鎖定/i.test(label))) {
+                    return false;
+                }
+                if (labels.some(label => /\bunlocked\b|已解锁|已解鎖/i.test(label))) return true;
+                // The filename is a fallback for missing/localized labels. The
+                // enclosing "exclusivelocked" directory does not indicate state.
+                try {
+                    const src = element.currentSrc || element.getAttribute('src');
+                    if (!src) return false;
+                    const filename = new URL(src, element.baseURI).pathname.split('/').pop();
+                    return /^flyout_unlocked(?:_[a-z0-9]+)*\.svg$/i.test(filename);
+                } catch {
+                    return false;
+                }
+            };
+            const lockClass = element => !unlockedBadge(element) &&
+                /(?:^|[\s_-])lock(?:ed)?(?:$|[\s_-])/.test(words(element.getAttribute('class')));
             const lockedLabel = element => ['aria-label', 'title'].some(attribute =>
                 /(?:^lock(?:ed)?(?:\s+(?:icon|offer|task|activity))?$|\b(?:offer|task|activity)(?:\s+is)?\s+locked\b|^(?:锁|锁定)$|未解锁|已锁定)/i
                     .test((element.getAttribute(attribute) || '').trim()));
