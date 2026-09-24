@@ -84,6 +84,13 @@ class ActivityBrowserTests(unittest.TestCase):
         elif url.path == "/test-credit":
             self.completed.add(offer)
             html = "ok"
+        elif url.path == "/test-puzzle-click":
+            self.visited.append(offer)
+            if self.credit_visits:
+                self.completed.add(offer)
+            html = "ok"
+        elif url.path == "/test-shared-puzzle":
+            html = "<h1>拼图完成</h1>"
         elif url.path == "/test-invite":
             self.invites += 1
             html = "unexpected invitation"
@@ -131,6 +138,52 @@ class ActivityBrowserTests(unittest.TestCase):
         self.assertEqual(len(candidates), 2)
         self.assertEqual(parser.task_state(original), "pending")
         self.assertEqual(find_task(original, candidates).task_id, original.task_id)
+
+    def shared_puzzle_panel(self) -> str:
+        return FIXTURE.with_name("rewards_shared_puzzle_panel.html").read_text().replace(
+            "__COMPLETED_OFFERS__", json.dumps(sorted(self.completed))
+        )
+
+    def test_shared_puzzle_link_does_not_borrow_another_cards_completion(self) -> None:
+        with patch.object(self, "panel_html", side_effect=self.shared_puzzle_panel):
+            self.page.goto("https://www.bing.com/")
+            parser = PanelParser(self.page)
+            self.assertTrue(parser.open_panel())
+            pending, completed = parser.parse_tasks()
+            self.assertEqual(pending.href, completed.href)
+            self.assertNotEqual(pending.task_id, completed.task_id)
+            self.assertEqual(parser.task_state(pending), "pending")
+            self.assertEqual(parser.task_state(completed), "completed")
+
+            parser._root().locator('[data-scenario="weekly"]').evaluate(
+                "node => node.parentElement.append(node)"
+            )
+            self.assertEqual(find_task(pending, parser.parse_tasks()).title, "周中拼图")
+            parser._root().locator('[data-scenario="weekly"]').evaluate("node => node.remove()")
+            self.assertIsNone(find_task(pending, parser.parse_tasks()))
+            self.assertEqual(parser.task_state(pending), "unknown")
+
+    @patch("src.tasks.daily_activities.random_delay")
+    def test_runner_executes_pending_shared_link_puzzle_and_checks_its_own_credit(self, *_: object) -> None:
+        with patch.object(self, "panel_html", side_effect=self.shared_puzzle_panel):
+            result = self.runner().run()
+        self.assertEqual(self.visited, ["weekly"])
+        self.assertEqual(result, {
+            "completed": ["周中拼图"], "failed": [], "skipped": ["完成此拼图 (已完成)"],
+        })
+        self.assertEqual(self.context.pages, [self.page])
+
+    @patch("src.rewards.panel_parser.PanelParser.capture_diagnostics")
+    @patch("src.tasks.daily_activities.random_delay")
+    def test_shared_link_puzzle_without_its_own_credit_remains_failed(self, *_: object) -> None:
+        self.credit_visits = False
+        with patch.object(self, "panel_html", side_effect=self.shared_puzzle_panel):
+            result = self.runner().run()
+        self.assertEqual(self.visited, ["weekly"])
+        self.assertEqual(result, {
+            "completed": [], "failed": ["周中拼图 (未确认完成)"],
+            "skipped": ["完成此拼图 (已完成)"],
+        })
 
     def test_nested_link_metadata_does_not_duplicate_or_strip_card(self) -> None:
         self.page.set_content("""<div class="promo_cont" aria-label="Offer not Completed">

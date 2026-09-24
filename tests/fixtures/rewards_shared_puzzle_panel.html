@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  .promo_cont { display: block; margin: 8px; }
+  .promo_cont a { display: block; padding: 16px; }
+  .promo-title, .promo-desc, .point_cont { display: block; }
+</style>
+<!-- Independent synthetic offers intentionally share a destination and no offer IDs. -->
+<div class="promo_cont" data-scenario="weekly" aria-label="周中拼图 - Offer not Completed">
+  <a href="https://www.bing.com/test-shared-puzzle" target="_blank"
+     onclick="fetch('/test-puzzle-click?offer=weekly')">
+    <span class="promo-title">周中拼图</span>
+    <span class="promo-desc">你是否能够完成这个拼图？</span>
+    <span class="point_cont">+5</span>
+  </a>
+</div>
+<div class="promo_cont slim" data-scenario="base" aria-label="完成此拼图 - Offer is Completed">
+  <a href="https://www.bing.com/test-shared-puzzle" target="_blank"
+     onclick="fetch('/test-puzzle-click?offer=base')">
+    <span class="promo-title">完成此拼图</span>
+    <span class="point_cont">✓5</span>
+  </a>
+</div>
+<script>
+  if (__COMPLETED_OFFERS__.includes('weekly')) {
+    const card = document.querySelector('[data-scenario="weekly"]');
+    card.setAttribute('aria-label', '周中拼图 - Offer is Completed');
+    card.classList.add('slim');
+    card.querySelector('.promo-desc').remove();
+    card.querySelector('.point_cont').textContent = '✓5';
+  }
+</script>

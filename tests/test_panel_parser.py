@@ -145,6 +145,21 @@ class PanelParserTests(unittest.TestCase):
             task_identity("stable-offer", "card-2", "/search?cvid=new"),
         )
 
+    def test_shared_destination_fallback_keeps_different_offers_separate(self) -> None:
+        href = "https://www.bing.com/search?q=puzzle"
+        weekly = task_identity("", "", href, title="周中拼图")
+        daily = task_identity("", "", href, title="完成此拼图")
+        self.assertNotEqual(weekly, daily)
+        self.assertEqual(
+            weekly, task_identity("", "", href + "&cvid=changed", title="  周中拼图  ")
+        )
+
+    def test_explicit_offer_id_stays_stable_when_its_title_changes(self) -> None:
+        self.assertEqual(
+            task_identity("stable-offer", "", "/old", title="待完成的活动"),
+            task_identity("stable-offer", "", "/new", title="活动已完成"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

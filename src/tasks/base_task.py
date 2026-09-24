@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from contextlib import suppress
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from loguru import logger
 
@@ -38,6 +39,7 @@ class BaseTask(ABC):
 class BaseSearchTask(BaseTask):
     device_name = "pc"
     count_key = "pc_count"
+    SEARCH_ATTEMPTS = 2
 
     def __init__(self, context: Any, config: dict[str, Any], search_terms: list[str]):
         self.context = context
@@ -56,20 +58,39 @@ class BaseSearchTask(BaseTask):
             return result
 
         page = self.context.new_page()
+        reload_home = True
         try:
-            page.goto("https://www.bing.com/", wait_until="domcontentloaded")
-            random_delay(1.5, 3.5)
             for index, term in enumerate(terms, start=1):
-                try:
-                    self._do_search(page, term)
-                    result["completed"] += 1
-                    logger.info(
-                        f"{self.device_name.upper()} 搜索 {index}/{len(terms)} 完成: {term}"
-                    )
-                except Exception as exc:
-                    result["failed_terms"].append(term)
-                    logger.warning(f"{self.device_name.upper()} 搜索失败 [{term}]: {exc}")
-                    self._capture_failure(page, index)
+                for attempt in range(1, self.SEARCH_ATTEMPTS + 1):
+                    try:
+                        self._prepare_search_page(page, reload_home=reload_home)
+                        self._do_search(page, term)
+                    except Exception as exc:
+                        reload_home = True
+                        if attempt == self.SEARCH_ATTEMPTS:
+                            result["failed_terms"].append(term)
+                            logger.warning(f"{self.device_name.upper()} 搜索失败 [{term}]: {exc}")
+                            self._capture_failure(page, index)
+                        # Chromium may still be navigating to its error document.
+                        # A fresh page prevents that navigation from interrupting
+                        # recovery, while keeping this context's login session.
+                        with suppress(Exception):
+                            page.close()
+                        page = self.context.new_page()
+                        if attempt < self.SEARCH_ATTEMPTS:
+                            logger.warning(
+                                f"{self.device_name.upper()} 搜索异常 [{term}]，"
+                                f"返回首页重试 {attempt}/{self.SEARCH_ATTEMPTS - 1}: {exc}"
+                            )
+                            random_delay(2, 4)
+                            continue
+                    else:
+                        reload_home = False
+                        result["completed"] += 1
+                        logger.info(
+                            f"{self.device_name.upper()} 搜索 {index}/{len(terms)} 完成: {term}"
+                        )
+                    break
 
                 if index < len(terms):
                     interval = random.uniform(
@@ -80,6 +101,17 @@ class BaseSearchTask(BaseTask):
             return result
         finally:
             page.close()
+
+    @staticmethod
+    def _prepare_search_page(page: Any, *, reload_home: bool) -> None:
+        url = urlsplit(page.url)
+        if (
+            reload_home
+            or url.hostname not in {"bing.com", "www.bing.com", "cn.bing.com"}
+            or url.path not in {"/", "/search"}
+        ):
+            page.goto("https://www.bing.com/", wait_until="domcontentloaded")
+            random_delay(1.5, 3.5)
 
     def _find_search_box(self, page: Any) -> Any:
         for selector in ("#sb_form_q", "input[name='q']", "textarea[name='q']"):
@@ -108,7 +140,12 @@ class BaseSearchTask(BaseTask):
         )
 
         if random.random() < float(self.config["search"]["click_result_probability"]):
-            self._visit_random_result(page)
+            try:
+                self._visit_random_result(page)
+            except Exception as exc:
+                # Search results already loaded. Optional browsing must not turn
+                # this search into a failure or cause the same term to be resent.
+                logger.warning(f"搜索已完成，浏览结果失败 [{term}]: {exc}")
 
     def _visit_random_result(self, page: Any) -> None:
         results = page.locator("#b_results .b_algo h2 a")
@@ -119,25 +156,29 @@ class BaseSearchTask(BaseTask):
         result = results.nth(random.randrange(count))
         previous_pages = set(self.context.pages)
         previous_url = page.url
-        result.click(timeout=8_000)
-        page.wait_for_timeout(1_000)
-        new_pages = [
-            candidate for candidate in self.context.pages if candidate not in previous_pages
-        ]
-        target = new_pages[-1] if new_pages else page
-        with suppress(Exception):
-            target.wait_for_load_state("domcontentloaded", timeout=12_000)
-        time.sleep(
-            random.uniform(
-                self.config["search"]["result_stay_min_sec"],
-                self.config["search"]["result_stay_max_sec"],
+        try:
+            result.click(timeout=8_000)
+            page.wait_for_timeout(1_000)
+            new_pages = [
+                candidate for candidate in self.context.pages if candidate not in previous_pages
+            ]
+            target = new_pages[-1] if new_pages else page
+            with suppress(Exception):
+                target.wait_for_load_state("domcontentloaded", timeout=12_000)
+            time.sleep(
+                random.uniform(
+                    self.config["search"]["result_stay_min_sec"],
+                    self.config["search"]["result_stay_max_sec"],
+                )
             )
-        )
-        if target is not page:
-            target.close()
-        elif page.url != previous_url:
-            page.go_back(wait_until="domcontentloaded", timeout=12_000)
-            page.locator("#b_results").wait_for(state="attached", timeout=10_000)
+        finally:
+            for candidate in self.context.pages:
+                if candidate not in previous_pages:
+                    with suppress(Exception):
+                        candidate.close()
+            if not page.is_closed() and page.url != previous_url:
+                page.go_back(wait_until="domcontentloaded", timeout=12_000)
+                page.locator("#b_results").wait_for(state="attached", timeout=10_000)
 
     def _capture_failure(self, page: Any, index: int) -> None:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

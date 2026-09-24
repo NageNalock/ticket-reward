@@ -82,7 +82,7 @@ def _same_task(original: TaskCard, candidate: TaskCard) -> bool:
     )
 
 
-def task_identity(offer_id: str, dom_id: str, href: str) -> str:
+def task_identity(offer_id: str, dom_id: str, href: str, *, title: str = "") -> str:
     """Keep stable offer/link identity in memory without exposing tracking URLs."""
     if offer_id:
         return sha256(f"offer:{offer_id}".encode()).hexdigest()
@@ -100,6 +100,11 @@ def task_identity(offer_id: str, dom_id: str, href: str) -> str:
             )
             # Generic DOM IDs can be recycled for another offer after a refresh.
             identity += f"\nlink:{link_identity}"
+    if identity and title:
+        # Different offers can share the exact destination without an offer ID.
+        # Keep the title in that fallback identity even if the other card later
+        # disappears, so its completed state cannot be mistaken for this offer's.
+        identity += f"\ntitle:{' '.join(title.split()).casefold()}"
     return sha256(identity.encode()).hexdigest() if identity else ""
 
 
@@ -469,7 +474,7 @@ class PanelParser:
             element=card,
             available=not self._card_is_locked(card),
             completed=completed,
-            task_id=task_identity(identity["offerId"], identity["domId"], href),
+            task_id=task_identity(identity["offerId"], identity["domId"], href, title=title),
             section=identity["section"],
             href=href,
         )
